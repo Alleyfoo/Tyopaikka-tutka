@@ -24,3 +24,20 @@ def test_normalize_companies_builds_full_address():
         "Fallback 2, 00200, Espoo",
         "00300, Vantaa",
     ]
+    # industry present even if groups missing
+    assert "industry" in df.columns
+
+
+def test_normalize_companies_picks_active_official_name():
+    rows = [
+        {
+            "names": [
+                {"name": "Vanha Oy", "type": "1", "registrationDate": "2020-01-01", "endDate": "2023-01-01"},
+                {"name": "Uusi Oy", "type": "1", "registrationDate": "2024-01-01"},
+                {"name": "Muu Nimi", "type": "2", "registrationDate": "2025-01-01"},
+            ],
+            "addresses": [{"street": "Katu", "postCode": "00100", "city": "Helsinki"}],
+        }
+    ]
+    df = normalize_companies(rows)
+    assert df.loc[0, "name"] == "Uusi Oy"

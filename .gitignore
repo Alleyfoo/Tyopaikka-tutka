@@ -10,6 +10,9 @@ __pycache__/
 dist/
 build/
 *.egg-info/
+src/apprenticeship_employer_scanner.egg-info/
+build/
+dist/
 *.sqlite
 data/geocode_cache.sqlite
 .DS_Store

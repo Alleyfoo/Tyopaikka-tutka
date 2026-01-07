@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 from typing import Iterable, List, Mapping, Any
 
 import pandas as pd
@@ -27,7 +28,7 @@ def clean_address(street: str, post_code: str, city: str) -> str:
     return unidecode(", ".join(parts))
 
 
-def normalize_companies(rows: Iterable[dict]) -> pd.DataFrame:
+def normalize_companies(rows: Iterable[dict], *, industry_groups: Mapping[str, list] | None = None) -> pd.DataFrame:
     rows_list = list(rows)
     df = pd.json_normalize(rows_list, sep=".")
     if df.empty:
@@ -38,9 +39,38 @@ def normalize_companies(rows: Iterable[dict]) -> pd.DataFrame:
     posts = []
     cities = []
     business_ids = []
+    names_out = []
+    industries = []
     for idx, row_series in df.iterrows():
         row = row_series.to_dict()
         original = rows_list[idx]
+
+        def pick_name_from_names(raw) -> str:
+            names_parsed = None
+            if isinstance(raw, str) and raw.strip().startswith("["):
+                try:
+                    parsed = ast.literal_eval(raw)
+                    if isinstance(parsed, list):
+                        names_parsed = parsed
+                except Exception:
+                    names_parsed = None
+            elif isinstance(raw, list):
+                names_parsed = raw
+            if not names_parsed:
+                return ""
+            names_list = [n for n in names_parsed if isinstance(n, dict)]
+            if not names_list:
+                return ""
+            active = [n for n in names_list if not n.get("endDate")]
+            candidates = active or names_list
+            type1 = [n for n in candidates if str(n.get("type") or "") == "1"]
+            if type1:
+                candidates = type1
+            def reg_key(n):
+                return str(n.get("registrationDate") or "")
+            candidates = sorted(candidates, key=reg_key, reverse=True)
+            return candidates[0].get("name", "") if candidates else ""
+
         addresses = original.get("addresses") if isinstance(original, dict) else None
         if isinstance(addresses, list) and addresses:
             first_addr = addresses[0] or {}
@@ -72,10 +102,32 @@ def normalize_companies(rows: Iterable[dict]) -> pd.DataFrame:
                 break
         business_ids.append(business_id)
 
+        # Name normalization
+        name_val = row.get("name") or ""
+        parsed_name = pick_name_from_names(original.get("names")) if isinstance(original, dict) else ""
+        if parsed_name:
+            name_val = parsed_name
+        names_out.append(name_val)
+
+        # Industry classification
+        code = (
+            row.get("main_business_line.type")
+            or row.get("mainBusinessLine.type")
+            or row.get("main_business_line")
+            or row.get("mainBusinessLine")
+            or ""
+        )
+        industries.append(code)
+
     df["full_address"] = [
         clean_address(street, post, city) for street, post, city in zip(streets, posts, cities)
     ]
     df["business_id"] = business_ids
+    df["name"] = names_out
+    from .industry import classify_industry, load_industry_groups
+
+    groups = industry_groups or load_industry_groups("config/industry_groups.yaml")
+    df["industry"] = [classify_industry(code, groups) for code in industries]
     return df
 
 

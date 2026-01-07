@@ -41,6 +41,10 @@ Työkalu, joka kokoaa shortlistan työnantajista (Uusimaa + Lahti/Päijät-Häme
 - Testit: `pytest`
 - Tavoite: `python -m apprscan --help` toimii ja testit ajettavissa.
 
+## Analytics ja kartta (offline)
+- Analytics ilman uutta crawlia: `apprscan analytics --master-xlsx out/master_YYYYMMDD.xlsx --jobs-xlsx out/run_YYYYMMDD/jobs/jobs.xlsx --jobs-diff out/run_YYYYMMDD/jobs/diff.xlsx --out out/analytics_YYYYMMDD.xlsx` (tuottaa KPI/Stations/Tags-välilehdet).
+- Kartta: `apprscan map --master-xlsx out/master_YYYYMMDD.xlsx --jobs-diff out/run_YYYYMMDD/jobs/diff.xlsx --out out/jobs_map_YYYYMMDD.html`
+
 ## Muistiinpanot
 - Nominatimilla on tiukat käyttöehdot; käytä välimuistia ja pidä viive vähintään 1 s.
 - Tutkimusmateriaali: alkuperäinen Colab-export sijoitetaan tiedostoon `research/work_commute_scanner_original.py` (ei sisälly repoihin).

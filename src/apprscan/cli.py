@@ -35,6 +35,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     jobs_parser.add_argument("--companies", type=str, required=True, help="Yritystiedosto (xlsx/csv/parquet).")
     jobs_parser.add_argument("--domains", type=str, default=None, help="Domain mapping CSV (business_id,domain).")
+    jobs_parser.add_argument(
+        "--suggested",
+        type=str,
+        default=None,
+        help="domains_suggested.csv fallback; käytetään jos varsinaisesta domain-mapista puuttuu.",
+    )
     jobs_parser.add_argument("--out", type=str, default="out/jobs", help="Output-hakemisto.")
     jobs_parser.add_argument("--max-domains", type=int, default=300, help="Maksimi domainit per ajo.")
     jobs_parser.add_argument(
@@ -68,6 +74,23 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=True,
         help="Lue vain Shortlist sheet xlsx-tiedostosta.",
+    )
+    domains_parser.add_argument(
+        "--suggest",
+        action="store_true",
+        help="Yritä löytää urasivudomainit automaattisesti (kirjoittaa domains_suggested.csv).",
+    )
+    domains_parser.add_argument("--max-companies", type=int, default=200, help="Maksimi yrityksiä discoveryyn.")
+    domains_parser.add_argument(
+        "--validate",
+        action="store_true",
+        help="Validoi olemassa oleva domains CSV (HTTP-status, redirect, consent) ja kirjoita domains_validated.csv.",
+    )
+    domains_parser.add_argument(
+        "--domains",
+        type=str,
+        default=None,
+        help="Olemassa oleva domains CSV validointia varten (business_id,domain). Oletus: --out tiedosto.",
     )
     domains_parser.set_defaults(func=domains_command)
 
@@ -122,6 +145,41 @@ def build_parser() -> argparse.ArgumentParser:
         help="Tulostiedosto (tekstiraportti).",
     )
     watch_parser.set_defaults(func=watch_command)
+
+    analytics_parser = subparsers.add_parser(
+        "analytics",
+        help="Tuota analytics.xlsx olemassa olevista artefakteista.",
+        description="Laskee KPI:t, asema- ja tagiyhteenvedot master/jobs/diff -tiedostoista.",
+    )
+    analytics_parser.add_argument("--master-xlsx", type=str, required=True, help="Polku master.xlsx:ään (Shortlist).")
+    analytics_parser.add_argument(
+        "--jobs-xlsx", type=str, required=True, help="Polku jobs.xlsx/jsonl (kaikki työpaikat)."
+    )
+    analytics_parser.add_argument("--jobs-diff", type=str, required=True, help="Polku diff-tiedostoon (uudet työpaikat).")
+    analytics_parser.add_argument("--out", type=str, default="out/analytics.xlsx", help="Output tiedosto (xlsx).")
+    analytics_parser.set_defaults(func=analytics_command)
+
+    map_parser = subparsers.add_parser(
+        "map",
+        help="Renderöi jobs_map.html Shortlistista ja diffistä.",
+        description="Tekee interaktiivisen kartan ilman uutta crawlia.",
+    )
+    map_parser.add_argument("--master-xlsx", type=str, required=True, help="Polku master.xlsx:ään (Shortlist).")
+    map_parser.add_argument("--jobs-diff", type=str, required=False, help="Polku diff-tiedostoon (uudet työpaikat).")
+    map_parser.add_argument("--out", type=str, default="out/jobs_map.html", help="Output HTML -kartta.")
+    map_parser.add_argument(
+        "--mode",
+        type=str,
+        default="jobs",
+        choices=["jobs", "companies"],
+        help="Karttatila: jobs=diff + shortlist, companies=yritykset.",
+    )
+    map_parser.add_argument("--sheet", type=str, default="Shortlist", help="Sheet masterista (Shortlist/Excluded/all).")
+    map_parser.add_argument("--nace-prefix", type=str, default="", help="Pilkutetut TOL/NACE-prefixit (esim. 62,63).")
+    map_parser.add_argument("--only-recruiting", action="store_true", help="Näytä vain recruiting_active=TRUE.")
+    map_parser.add_argument("--min-score", type=float, default=None, help="Vähimmäisscore kartalle.")
+    map_parser.add_argument("--max-distance-km", type=float, default=None, help="Maksimietäisyys km kartalle.")
+    map_parser.set_defaults(func=map_command)
 
     run_parser = subparsers.add_parser(
         "run",
@@ -201,6 +259,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Kirjoita lopullinen master-työkirja (Shortlist, Excluded, Jobs_All, Jobs_New, Crawl_Stats, Activity).",
     )
     run_parser.add_argument(
+        "--industry-config",
+        type=str,
+        default="config/industry_groups.yaml",
+        help="Industry groups YAML (prefix-listat). Puuttuu -> industry=other.",
+    )
+    run_parser.add_argument(
         "--jobs-jsonl",
         type=str,
         default=None,
@@ -252,7 +316,10 @@ def run_command(args: argparse.Namespace) -> int:
         all_rows = all_rows[: args.limit]
 
     print(f"Haettu rivejä: {len(all_rows)}")
-    df = normalize_companies(all_rows)
+    from .industry import load_industry_groups
+
+    groups = load_industry_groups(args.industry_config)
+    df = normalize_companies(all_rows, industry_groups=groups)
     if df.empty:
         print("Ei rivejä käsiteltäväksi.")
         return 0
@@ -535,6 +602,16 @@ def jobs_command(args: argparse.Namespace) -> int:
                     domain_map[bid] = dom
         else:
             print(f"Domain mapping file not found: {dom_path} (continuing without domains)")
+    suggested_map = {}
+    if getattr(args, "suggested", None):
+        sug_path = Path(args.suggested)
+        if sug_path.exists():
+            sug_df = pd.read_csv(sug_path)
+            for _, r in sug_df.iterrows():
+                bid = str(r.get("business_id") or "").strip()
+                dom = str(r.get("suggested_base_url") or r.get("domain") or "").strip()
+                if bid and dom:
+                    suggested_map[bid] = dom
 
     try:
         companies_df = pipeline.load_companies(companies_path, only_shortlist=args.only_shortlist)
@@ -551,6 +628,7 @@ def jobs_command(args: argparse.Namespace) -> int:
         req_per_second=args.rate_limit,
         debug_html=args.debug_html,
         out_raw_dir=raw_dir,
+        suggested_map=suggested_map or None,
     )
 
     known_path = Path(args.known_jobs)
@@ -613,12 +691,111 @@ def watch_command(args: argparse.Namespace) -> int:
         else [],
     }
     jobs_diff = pd.read_excel(diff_path)
-    generate_watch_report(shortlist_df, jobs_diff, Path(args.out), **kwargs)
+    stats_df = None
+    try:
+        stats_df = pd.read_excel(run_path, sheet_name="Crawl_Stats")
+    except Exception:
+        stats_df = None
+    generate_watch_report(shortlist_df, jobs_diff, Path(args.out), stats=stats_df, **kwargs)
     print(f"Watch report written to {args.out}")
     return 0
 
 
+def analytics_command(args: argparse.Namespace) -> int:
+    from .analytics import (
+        load_master_shortlist,
+        load_jobs_file,
+        load_jobs_diff,
+        load_stats_sheet,
+        summarize_kpi,
+        summarize_stations,
+        summarize_tags,
+        write_analytics,
+    )
+
+    master_path = Path(args.master_xlsx)
+    jobs_path = Path(args.jobs_xlsx)
+    diff_path = Path(args.jobs_diff)
+    if not master_path.exists():
+        print(f"master.xlsx not found: {master_path}")
+        return 1
+    if not jobs_path.exists():
+        print(f"jobs file not found: {jobs_path}")
+        return 1
+    if not diff_path.exists():
+        print(f"diff file not found: {diff_path}")
+        return 1
+
+    shortlist = load_master_shortlist(master_path)
+    jobs_df = load_jobs_file(jobs_path)
+    diff_df = load_jobs_diff(diff_path)
+    stats_df = load_stats_sheet(master_path)
+
+    stations_df = summarize_stations(shortlist, diff_df)
+    tags_new_df = summarize_tags(diff_df, shortlist)
+    tags_all_df = summarize_tags(jobs_df, shortlist) if jobs_df is not None else None
+    kpi_df = summarize_kpi(diff_df, shortlist, stats_df)
+    from .analytics.summarize import summarize_top_companies, summarize_industry
+
+    top_companies_df = summarize_top_companies(shortlist, diff_df, jobs_df)
+    industry_df = summarize_industry(shortlist, diff_df)
+
+    write_analytics(
+        args.out,
+        kpi_df=kpi_df,
+        stations_df=stations_df,
+        tags_new_df=tags_new_df,
+        tags_all_df=tags_all_df,
+        top_companies_df=top_companies_df,
+        industry_df=industry_df,
+    )
+    print(f"Analytics written to {args.out}")
+    return 0
+
+
+def map_command(args: argparse.Namespace) -> int:
+    from .map import render_jobs_map
+
+    master_path = Path(args.master_xlsx)
+    diff_path = Path(args.jobs_diff) if args.jobs_diff else None
+    if not master_path.exists():
+        print(f"master.xlsx not found: {master_path}")
+        return 1
+    sheet_name = args.sheet if args.sheet.lower() != "all" else None
+    shortlist = pd.read_excel(master_path, sheet_name=sheet_name or None)
+    if args.sheet.lower() == "all" and isinstance(shortlist, dict):
+        shortlist_df = shortlist.get("Shortlist", pd.DataFrame())
+        excluded_df = shortlist.get("Excluded", pd.DataFrame())
+        if not excluded_df.empty:
+            excluded_df["excluded_flag"] = True
+        if not shortlist_df.empty:
+            shortlist_df["excluded_flag"] = False
+        shortlist = pd.concat([shortlist_df, excluded_df], ignore_index=True)
+    diff_df = None
+    if diff_path and diff_path.exists():
+        if diff_path.suffix.lower() in {".xlsx", ".xls"}:
+            diff_df = pd.read_excel(diff_path)
+        elif diff_path.suffix.lower() == ".jsonl":
+            diff_df = pd.read_json(diff_path, lines=True)
+    industries = [s.strip() for s in args.nace_prefix.split(",") if s.strip()] if args.nace_prefix else []
+    render_jobs_map(
+        shortlist,
+        diff_df,
+        args.out,
+        mode=args.mode,
+        nace_prefix=industries,
+        sheet=args.sheet,
+        only_recruiting=args.only_recruiting,
+        min_score=args.min_score,
+        max_distance_km=args.max_distance_km,
+    )
+    print(f"Jobs map written to {args.out}")
+    return 0
+
+
 def domains_command(args: argparse.Namespace) -> int:
+    from .domains_discovery import suggest_domains, validate_domains
+
     companies_path = Path(args.companies)
     if not companies_path.exists():
         print(f"Companies file not found: {companies_path}")
@@ -674,6 +851,31 @@ def domains_command(args: argparse.Namespace) -> int:
     out_path = Path(args.out)
     out_df.to_csv(out_path, index=False)
     print(f"Domain template written: {out_path} ({len(out_df)} rows, housing names filtered out)")
+    # coverage summary
+    covered = out_df[out_df["domain"].astype(str).str.strip() != ""]
+    print(f"Coverage: input {len(out_df)}, have_domain {len(covered)}")
+
+    if getattr(args, "suggest", False):
+        suggestions = suggest_domains(out_df, max_companies=args.max_companies)
+        sug_path = out_path.with_name(out_path.stem + "_suggested.csv")
+        suggestions.to_csv(sug_path, index=False)
+        high = (suggestions["confidence"] == "high").sum() if not suggestions.empty else 0
+        med = (suggestions["confidence"] == "med").sum() if not suggestions.empty else 0
+        low = (suggestions["confidence"] == "low").sum() if not suggestions.empty else 0
+        print(
+            f"Suggested domains written: {sug_path} ({len(suggestions)} rows; high={high}, med={med}, low={low})"
+        )
+
+    if getattr(args, "validate", False):
+        validate_src = Path(args.domains or out_path)
+        if not validate_src.exists():
+            print(f"Domains file for validation not found: {validate_src}")
+            return 1
+        dom_df = pd.read_csv(validate_src)
+        validated = validate_domains(dom_df)
+        val_path = validate_src.with_name(validate_src.stem + "_validated.csv")
+        validated.to_csv(val_path, index=False)
+        print(f"Validated domains written: {val_path} ({len(validated)} rows)")
     return 0
 
 

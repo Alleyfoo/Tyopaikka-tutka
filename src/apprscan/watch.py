@@ -34,6 +34,7 @@ def generate_watch_report(
     shortlist: Optional[pd.DataFrame],
     jobs_diff: pd.DataFrame,
     out_path: Path,
+    stats: Optional[pd.DataFrame] = None,
     *,
     include_tags: Iterable[str] | None = None,
     exclude_keywords: Iterable[str] | None = None,
@@ -123,7 +124,12 @@ def generate_watch_report(
         url = row.get("job_url") or ""
         tags = row.get("tags") if isinstance(row.get("tags"), list) else []
         loc = row.get("location_text") or ""
-        company_name = row.get("company_name") or lookup.get(bid, {}).get("name") or ""
+        company_name = row.get("company_name")
+        if company_name is None or (isinstance(company_name, float) and pd.isna(company_name)) or not str(
+            company_name
+        ).strip():
+            fallback = lookup.get(bid, {}).get("name") or row.get("company_domain") or bid
+            company_name = fallback
         lines.append(f"- {company_name} ({bid}): {title}")
         if tags:
             lines.append(f"  tags: {', '.join(tags)}")
@@ -166,5 +172,36 @@ def generate_watch_report(
             bid = str(r["bid"])
             name = lookup.get(bid, {}).get("name") or ""
             lines.append(f"- {name} ({bid}): {int(r['count'])}")
+
+    # Crawl coverage summary if stats provided
+    if stats is not None and not stats.empty:
+        lines.append("")
+        lines.append("Crawl coverage:")
+        domains_total = len(stats)
+        domains_with_jobs = int((stats["jobs_found"] > 0).sum()) if "jobs_found" in stats else 0
+        lines.append(f"- Domains crawled: {domains_total}")
+        lines.append(f"- Domains with jobs: {domains_with_jobs}")
+        if "status" in stats:
+            status_counts = stats["status"].value_counts()
+            breakdown = ", ".join(f"{k}={v}" for k, v in status_counts.items())
+            lines.append(f"- Status breakdown: {breakdown}")
+            top_skips = stats[stats["status"] != "ok"]["status"].value_counts().head(3)
+            if not top_skips.empty:
+                top_str = ", ".join(f"{name}: {cnt}" for name, cnt in top_skips.items())
+                lines.append(f"- Top skip reasons: {top_str}")
+        if "errors_top" in stats and stats["errors_top"].notna().any():
+            top_errors = (
+                stats["errors_top"]
+                .dropna()
+                .str.split(";")
+                .explode()
+                .value_counts()
+                .head(3)
+            )
+            if not top_errors.empty:
+                lines.append(
+                    "- Top errors: "
+                    + ", ".join(f"{name.split(':')[0]} ({cnt})" for name, cnt in top_errors.items())
+                )
 
     out_path.write_text("\n".join(lines), encoding="utf-8")

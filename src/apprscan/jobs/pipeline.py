@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from collections import Counter
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlparse
@@ -35,20 +36,45 @@ class CrawlStats:
     ats_fetch_reason: str | None = None
     robots_rule_hit: str | None = None
     first_blocked_url: str | None = None
+    status: str | None = None
+
+    def _compute_status(self) -> str:
+        err_set = set(self.errors)
+        if self.jobs_found and self.jobs_found > 0:
+            return "ok"
+        if self.skipped_reason in {ROBOTS_DISALLOW_ALL, ROBOTS_DISALLOW_URL, "http_403"} or "http_403" in err_set:
+            return "blocked"
+        if "cookie_consent" in err_set:
+            return "consent_gate"
+        if self.skipped_reason in {"timeout", "dns", "base_fetch_failed"} or err_set & {
+            "timeout",
+            "dns",
+            "max_retries_exceeded",
+        }:
+            return "technical_fail"
+        if "listing_url_skipped" in err_set:
+            return "no_signal"
+        return "no_signal"
 
     def to_dict(self) -> Dict[str, object]:
+        counts = Counter(self.errors) if self.errors else Counter()
+        errors_top = ";".join(f"{k}:{v}" for k, v in counts.most_common()) if counts else None
+        status = self.status or self._compute_status()
         return {
             "domain": self.domain,
             "pages_fetched": self.pages_fetched,
             "jobs_found": self.jobs_found,
             "extractor_used": self.extractor_used,
             "errors": ";".join(self.errors) if self.errors else None,
+            "errors_count": sum(counts.values()) if counts else 0,
+            "errors_top": errors_top,
             "skipped_reason": self.skipped_reason,
             "ats_detected": self.ats_detected,
             "ats_fetch_ok": self.ats_fetch_ok,
             "ats_fetch_reason": self.ats_fetch_reason,
             "robots_rule_hit": self.robots_rule_hit,
             "first_blocked_url": self.first_blocked_url,
+            "status": status,
         }
 
 
@@ -72,7 +98,15 @@ def load_companies(path: Path, only_shortlist: bool = True) -> pd.DataFrame:
 
 def build_domain(company_row: pd.Series, domain_map: Dict[str, str]) -> str:
     bid = str(company_row.get("business_id") or "").strip()
-    domain = str(company_row.get("domain") or domain_map.get(bid, "")).strip()
+    domain_raw = company_row.get("domain")
+    domain = domain_map.get(bid, "")
+    if isinstance(domain_raw, str):
+        domain = domain_raw
+    elif domain_raw and not pd.isna(domain_raw):
+        domain = str(domain_raw)
+    domain = str(domain or "").strip()
+    if domain.lower() in {"nan", "none", "null"}:
+        return ""
     return domain
 
 
@@ -189,6 +223,7 @@ def crawl_domain(
             rate_limit_state=rate_limit_state,
             debug_html_dir=debug_html_dir,
             req_per_second_per_domain=req_per_second,
+            errors=stats.errors,
         )
         if generic_jobs:
             all_jobs.extend(generic_jobs)
@@ -202,6 +237,7 @@ def crawl_jobs_pipeline(
     companies_df: pd.DataFrame,
     domain_map: Dict[str, str],
     *,
+    suggested_map: Optional[Dict[str, str]] = None,
     max_domains: int = 300,
     max_pages_per_domain: int = 30,
     req_per_second: float = 1.0,
@@ -223,7 +259,13 @@ def crawl_jobs_pipeline(
             if processed >= max_domains:
                 break
             domain = build_domain(row, domain_map)
+            if not domain and suggested_map is not None:
+                bid_lookup = str(row.get("business_id") or "").strip()
+                domain = suggested_map.get(bid_lookup, "")
             if not domain:
+                stat = CrawlStats(domain="")
+                stat.status = "no_domain"
+                stats_rows.append(stat.to_dict())
                 continue
             company = {
                 "business_id": str(row.get("business_id") or ""),
@@ -260,6 +302,11 @@ def crawl_jobs_pipeline(
 
 def apply_diff(jobs_df: pd.DataFrame, known_path: Path) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Mark is_new and produce diff of new jobs."""
+    # Drop obvious duplicates before computing fingerprints/diff
+    jobs_df = jobs_df.drop_duplicates(subset=["job_url"]).reset_index(drop=True)
+    if "company_business_id" not in jobs_df.columns:
+        jobs_df["company_business_id"] = jobs_df.get("business_id", "")
+
     def fingerprint(row):
         def norm(val: str) -> str:
             import re
@@ -311,6 +358,8 @@ def apply_diff(jobs_df: pd.DataFrame, known_path: Path) -> Tuple[pd.DataFrame, p
     jobs_df["is_new"] = ~jobs_df["job_url"].astype(str).isin(known_urls) & ~jobs_df[
         "job_fingerprint"
     ].astype(int).isin(known_fps)
+    # Drop duplicate fingerprints per company to avoid consent/list duplicates
+    jobs_df = jobs_df.drop_duplicates(subset=["company_business_id", "job_fingerprint"]).reset_index(drop=True)
     new_jobs = jobs_df[jobs_df["is_new"]]
 
     known_path.parent.mkdir(parents=True, exist_ok=True)

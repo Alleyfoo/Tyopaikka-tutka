@@ -16,7 +16,13 @@ def test_domains_command_filters_housing(tmp_path):
     )
     data.to_excel(companies_path, index=False)
 
-    args = SimpleNamespace(companies=str(companies_path), out=str(tmp_path / "domains.csv"), only_shortlist=False)
+    args = SimpleNamespace(
+        companies=str(companies_path),
+        out=str(tmp_path / "domains.csv"),
+        only_shortlist=False,
+        suggest=False,
+        max_companies=10,
+    )
     domains_command(args)
 
     out_df = pd.read_csv(args.out)
