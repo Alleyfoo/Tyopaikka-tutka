@@ -12,6 +12,9 @@ def score_company(
     industry_whitelist_hit: bool = False,
     industry_blacklist_hit: bool = False,
     excluded: bool = False,
+    recruiting_active: bool = False,
+    new_jobs: int = 0,
+    tag_counts: Dict[str, int] | None = None,
 ) -> Tuple[int, str]:
     """Return (score, reasons_text)."""
     score = 0
@@ -36,6 +39,17 @@ def score_company(
     if excluded:
         score -= 10
         reasons.append("excluded")
+    if recruiting_active:
+        score += 2
+        reasons.append("recruiting_active")
+    if new_jobs > 0:
+        score += 1
+        reasons.append("new_jobs")
+    if tag_counts:
+        for tag in ("data", "it_support", "salesforce", "oppisopimus"):
+            if tag_counts.get(tag, 0) > 0:
+                score += 1
+                reasons.append(f"tag_{tag}")
 
     reasons_text = ";".join(reasons)
     return score, reasons_text

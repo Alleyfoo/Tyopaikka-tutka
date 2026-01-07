@@ -57,3 +57,27 @@ def write_jobs_outputs(jobs_df: pd.DataFrame, stats_df: pd.DataFrame, out_dir: s
     jobs_df.to_excel(jobs_path, index=False)
     jobs_df.to_json(jsonl_path, orient="records", lines=True, force_ascii=False)
     stats_df.to_excel(stats_path, index=False)
+
+
+def write_master_workbook(
+    out_path: str | Path,
+    *,
+    shortlist: pd.DataFrame | None = None,
+    excluded: pd.DataFrame | None = None,
+    jobs_all: pd.DataFrame,
+    jobs_new: pd.DataFrame,
+    crawl_stats: pd.DataFrame,
+    activity: pd.DataFrame | None = None,
+) -> None:
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with pd.ExcelWriter(out_path) as writer:
+        if shortlist is not None:
+            shortlist.to_excel(writer, index=False, sheet_name="Shortlist")
+        if excluded is not None:
+            excluded.to_excel(writer, index=False, sheet_name="Excluded")
+        jobs_all.to_excel(writer, index=False, sheet_name="Jobs_All")
+        jobs_new.to_excel(writer, index=False, sheet_name="Jobs_New")
+        crawl_stats.to_excel(writer, index=False, sheet_name="Crawl_Stats")
+        if activity is not None:
+            activity.to_excel(writer, index=False, sheet_name="Company_Activity")

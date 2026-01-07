@@ -11,6 +11,8 @@ from urllib.parse import urlparse
 import requests
 from requests import Response
 
+from .robots import RobotsChecker
+
 
 @dataclass
 class FetchResult:
@@ -34,9 +36,13 @@ def fetch_url(
     rate_limit_state: Optional[Dict[str, float]] = None,
     req_per_second_per_domain: float = 1.0,
     debug_html_dir: Optional[Path] = None,
+    robots: Optional[RobotsChecker] = None,
 ) -> Tuple[Optional[FetchResult], Optional[str]]:
     parsed = urlparse(url)
     domain = parsed.netloc
+    if robots and not robots.can_fetch(url):
+        return None, "robots_disallow"
+
     if rate_limit_state is not None:
         last = rate_limit_state.get(domain, 0)
         min_interval = 1.0 / req_per_second_per_domain if req_per_second_per_domain > 0 else 0

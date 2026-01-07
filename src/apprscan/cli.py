@@ -122,6 +122,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Työntekijämäärä-enrichment CSV (business_id, employee_count/employee_band).",
     )
     run_parser.add_argument(
+        "--activity-file",
+        type=str,
+        default=None,
+        help="Yritysten rekryaktiivisuus (company_activity.xlsx) jobs-ajosta.",
+    )
+    run_parser.add_argument(
         "--out",
         type=str,
         default="out",
@@ -286,9 +292,61 @@ def run_command(args: argparse.Namespace) -> int:
     df["employee_source"] = employee_sources
     df["employee_gate"] = employee_gate
 
+    # Job activity enrichment
+    job_activity = {}
+    if args.activity_file:
+        try:
+            if str(args.activity_file).lower().endswith((".xlsx", ".xls")):
+                act_df = pd.read_excel(args.activity_file)
+            else:
+                act_df = pd.read_csv(args.activity_file)
+            for _, r in act_df.iterrows():
+                bid = str(r.get("business_id") or "").strip()
+                if bid:
+                    job_activity[bid] = r
+        except Exception as exc:  # pragma: no cover - defensive logging
+            print(f"Aktiviteetin lataus epäonnistui: {exc}")
+
+    job_count_total = []
+    job_count_new = []
+    tag_data = []
+    tag_it = []
+    tag_sf = []
+    tag_ops = []
+    recruiting_active = []
+    for _, row in df.iterrows():
+        bid = str(row.get("business_id") or "")
+        act = job_activity.get(bid, {})
+        job_count_total.append(act.get("job_count_total", 0) if isinstance(act, pd.Series) else act.get("job_count_total", 0))
+        job_count_new.append(act.get("job_count_new_since_last", 0) if isinstance(act, pd.Series) else act.get("job_count_new_since_last", 0))
+        tag_data.append(act.get("tag_count_data", 0) if isinstance(act, pd.Series) else act.get("tag_count_data", 0))
+        tag_it.append(act.get("tag_count_it_support", 0) if isinstance(act, pd.Series) else act.get("tag_count_it_support", 0))
+        tag_sf.append(act.get("tag_count_salesforce", 0) if isinstance(act, pd.Series) else act.get("tag_count_salesforce", 0))
+        tag_ops.append(act.get("tag_count_oppisopimus", 0) if isinstance(act, pd.Series) else act.get("tag_count_oppisopimus", 0))
+        recruiting_active.append(bool(act.get("recruiting_active")) if isinstance(act, pd.Series) else bool(act.get("recruiting_active")))
+
+    df["job_count_total"] = job_count_total
+    df["job_count_new_since_last"] = job_count_new
+    df["tag_count_data"] = tag_data
+    df["tag_count_it_support"] = tag_it
+    df["tag_count_salesforce"] = tag_sf
+    df["tag_count_oppisopimus"] = tag_ops
+    df["recruiting_active"] = recruiting_active
+
     scores = []
     score_reasons = []
-    for excl, row, wl_hit, bl_hit in zip(excluded_flags, df.iterrows(), industry_whitelist_hit, industry_blacklist_hit):
+    for excl, row, wl_hit, bl_hit, r_active, new_jobs, t_data, t_it, t_sf, t_ops in zip(
+        excluded_flags,
+        df.iterrows(),
+        industry_whitelist_hit,
+        industry_blacklist_hit,
+        recruiting_active,
+        job_count_new,
+        tag_data,
+        tag_it,
+        tag_sf,
+        tag_ops,
+    ):
         _, r = row
         s, reasons = score_company(
             r.to_dict(),
@@ -296,6 +354,14 @@ def run_command(args: argparse.Namespace) -> int:
             industry_whitelist_hit=bool(wl_hit),
             industry_blacklist_hit=bool(bl_hit),
             excluded=bool(excl),
+            recruiting_active=bool(r_active),
+            new_jobs=int(new_jobs or 0),
+            tag_counts={
+                "data": int(t_data or 0),
+                "it_support": int(t_it or 0),
+                "salesforce": int(t_sf or 0),
+                "oppisopimus": int(t_ops or 0),
+            },
         )
         scores.append(s)
         score_reasons.append(reasons)

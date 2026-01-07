@@ -16,6 +16,7 @@ from .discovery import DiscoveryResult, discover_paths, parse_sitemap, filter_di
 from .extract import extract_jobs_from_jsonld, extract_jobs_generic
 from .fetch import fetch_url
 from .model import JobPosting
+from .robots import RobotsChecker
 from .storage import jobs_to_dataframe
 from .tagging import detect_tags, DEFAULT_TAG_RULES
 
@@ -83,7 +84,7 @@ def crawl_domain(
     tag_rules: Dict[str, List[str]] | None = None,
 ) -> Tuple[List[JobPosting], CrawlStats]:
     stats = CrawlStats(domain=domain)
-    robots_cache: Dict[str, str] = {}
+    robots_checker = RobotsChecker()
 
     # Fetch base page for ATS detection
     base_url = f"https://{domain}"
@@ -93,6 +94,7 @@ def crawl_domain(
         rate_limit_state=rate_limit_state,
         req_per_second_per_domain=req_per_second,
         debug_html_dir=debug_html_dir,
+        robots=robots_checker,
     )
     if res is None:
         stats.skipped_reason = reason or "base_fetch_failed"
@@ -121,6 +123,7 @@ def crawl_domain(
         rate_limit_state=rate_limit_state,
         req_per_second_per_domain=req_per_second,
         debug_html_dir=debug_html_dir,
+        robots=robots_checker,
     )
     if sm_res and sm_res.status == 200:
         stats.pages_fetched += 1
@@ -138,6 +141,7 @@ def crawl_domain(
             rate_limit_state=rate_limit_state,
             req_per_second_per_domain=req_per_second,
             debug_html_dir=debug_html_dir,
+            robots=robots_checker,
         )
         if res is None:
             stats.errors.append(reason or f"fetch_failed:{seed}")
@@ -179,7 +183,7 @@ def crawl_jobs_pipeline(
     debug_html: bool = False,
     out_raw_dir: Optional[Path] = None,
     tag_rules: Dict[str, List[str]] | None = None,
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     session = requests.Session()
     rate_state: Dict[str, float] = {}
     crawl_ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -217,29 +221,56 @@ def crawl_jobs_pipeline(
 
     jobs_df = jobs_to_dataframe(jobs)
     stats_df = pd.DataFrame(stats_rows)
-    return jobs_df, stats_df
+    activity_df = summarize_activity(jobs_df)
+    return jobs_df, stats_df, activity_df
 
 
 def apply_diff(jobs_df: pd.DataFrame, known_path: Path) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Mark is_new and produce diff of new jobs."""
-    job_urls = set(jobs_df["job_url"].astype(str))
-    known_urls: set[str] = set()
-    if known_path.exists():
-        known_df = pd.read_parquet(known_path)
-        known_urls = set(known_df["job_url"].astype(str))
+    def fingerprint(row):
+        title = str(row.get("job_title") or "").strip().lower()
+        loc = str(row.get("location_text") or "").strip().lower()
+        posted = str(row.get("posted_date") or "").strip().lower()
+        domain = str(row.get("company_domain") or "").strip().lower()
+        return hash((title, loc, posted, domain))
 
     jobs_df = jobs_df.copy()
-    jobs_df["is_new"] = ~jobs_df["job_url"].astype(str).isin(known_urls)
+    jobs_df["job_fingerprint"] = jobs_df.apply(fingerprint, axis=1)
+
+    known_urls: set[str] = set()
+    known_fps: set[int] = set()
+    if known_path.exists():
+        known_df = pd.read_parquet(known_path)
+        if "job_url" in known_df.columns:
+            known_urls = set(known_df["job_url"].astype(str))
+        if "job_fingerprint" in known_df.columns:
+            known_fps = set(known_df["job_fingerprint"].astype(int))
+
+    jobs_df["is_new"] = ~jobs_df["job_url"].astype(str).isin(known_urls) & ~jobs_df[
+        "job_fingerprint"
+    ].astype(int).isin(known_fps)
     new_jobs = jobs_df[jobs_df["is_new"]]
 
     known_path.parent.mkdir(parents=True, exist_ok=True)
-    jobs_df[["job_url"]].to_parquet(known_path, index=False)
+    jobs_df[["job_url", "job_fingerprint"]].to_parquet(known_path, index=False)
     return jobs_df, new_jobs
 
 
 def summarize_activity(jobs_df: pd.DataFrame) -> pd.DataFrame:
     if jobs_df.empty:
-        return pd.DataFrame(columns=["business_id", "job_count_total", "job_count_last_30d", "recruiting_active"])
+        return pd.DataFrame(
+            columns=[
+                "business_id",
+                "job_count_total",
+                "job_count_last_30d",
+                "job_count_new_since_last",
+                "recruiting_active",
+                "tag_count_data",
+                "tag_count_it_support",
+                "tag_count_salesforce",
+                "tag_count_oppisopimus",
+            ]
+        )
     jobs_df = jobs_df.copy()
     jobs_df["posted_date_parsed"] = pd.to_datetime(jobs_df["posted_date"], errors="coerce")
     now = pd.Timestamp.utcnow()
@@ -249,12 +280,22 @@ def summarize_activity(jobs_df: pd.DataFrame) -> pd.DataFrame:
     for bid, group in jobs_df.groupby("company_business_id"):
         total = len(group)
         recent = group[group["posted_date_parsed"] >= last_30]
+        new_since_last = group[group.get("is_new", False) == True]  # noqa: E712
+        # Tag counts
+        def count_tag(tag):
+            return sum(1 for tags in group["tags"] if isinstance(tags, list) and tag in tags)
+
         summaries.append(
             {
                 "business_id": bid,
                 "job_count_total": total,
                 "job_count_last_30d": len(recent),
+                "job_count_new_since_last": len(new_since_last),
                 "recruiting_active": total > 0,
+                "tag_count_data": count_tag("data"),
+                "tag_count_it_support": count_tag("it_support"),
+                "tag_count_salesforce": count_tag("salesforce"),
+                "tag_count_oppisopimus": count_tag("oppisopimus"),
             }
         )
     return pd.DataFrame(summaries)
