@@ -11,6 +11,7 @@ from geopy import Nominatim
 from geopy.extra.rate_limiter import RateLimiter
 
 DEFAULT_CACHE_PATH = Path("data/geocode_cache.sqlite")
+GEOCODE_TIMEOUT = 10
 
 
 def _ensure_db(conn: sqlite3.Connection) -> None:
@@ -56,8 +57,14 @@ def set_cached(address: str, lat: float, lon: float, cache_path: Path = DEFAULT_
 
 
 def _build_geocoder() -> Callable[[str], Optional[object]]:
-    nominatim = Nominatim(user_agent="apprenticeship-employer-scanner")
-    return RateLimiter(nominatim.geocode, min_delay_seconds=1.1, swallow_exceptions=True)
+    nominatim = Nominatim(user_agent="apprenticeship-employer-scanner", timeout=GEOCODE_TIMEOUT)
+    return RateLimiter(
+        nominatim.geocode,
+        min_delay_seconds=1.1,
+        swallow_exceptions=True,
+        max_retries=2,
+        error_wait_seconds=2.0,
+    )
 
 
 def geocode_address(
@@ -72,7 +79,10 @@ def geocode_address(
         return cached[0], cached[1], "cache", True
 
     geocode_func = geocoder or _build_geocoder()
-    loc = geocode_func(f"{address}, Finland")
+    try:
+        loc = geocode_func(f"{address}, Finland")
+    except Exception:
+        return None, None, "nominatim_error", False
 
     if loc is None:
         return None, None, "nominatim", False
