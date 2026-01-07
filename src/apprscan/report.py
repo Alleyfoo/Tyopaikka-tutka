@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
 
 import folium
 import pandas as pd
 
 
-def write_excel(df: pd.DataFrame, path: str) -> None:
-    df.to_excel(path, index=False)
+def write_excel(shortlist: pd.DataFrame, path: str, excluded: Optional[pd.DataFrame] = None) -> None:
+    with pd.ExcelWriter(path) as writer:
+        shortlist.to_excel(writer, index=False, sheet_name="Shortlist")
+        if excluded is not None:
+            excluded.to_excel(writer, index=False, sheet_name="Excluded")
 
 
 def write_geojson(df: pd.DataFrame, path: str) -> None:
@@ -46,10 +49,10 @@ def write_folium_map(df: pd.DataFrame, path_html: str) -> None:
     m.save(path_html)
 
 
-def export_reports(df: pd.DataFrame, out_dir: str) -> None:
+def export_reports(df: pd.DataFrame, out_dir: str, excluded: Optional[pd.DataFrame] = None) -> None:
     """Write Excel/GeoJSON/HTML outputs."""
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
-    write_excel(df, str(out_path / "companies.xlsx"))
+    write_excel(df, str(out_path / "companies.xlsx"), excluded=excluded)
     write_geojson(df, str(out_path / "companies.geojson"))
     write_folium_map(df, str(out_path / "companies_map.html"))

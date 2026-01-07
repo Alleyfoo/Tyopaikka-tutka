@@ -17,18 +17,19 @@ Työkalu, joka kokoaa shortlistan työnantajista (Uusimaa + Lahti/Päijät-Häme
 
 ## Nopeasti alkuun
 - Tulosta apu: `python -m apprscan --help`
-- Esimerkki (tuleva rajapinta):\
-  `apprscan run --cities Helsinki,Espoo,Vantaa,Mäntsälä,Lahti --radius-km 1.0 --out out/`
+- Esimerkki:\
+  `apprscan run --cities Helsinki,Espoo,Vantaa,Lahti --radius-km 1.0 --out out/ --max-pages 3 --include-excluded --whitelist koulutus --blacklist holding`
+  `apprscan run --cities Helsinki --employee-csv employees.csv --out out/`
 
 ## Konfiguraatio ja oletukset
 - Kaupungit: CSV-lista `--cities`-argumentissa (tuki config-tiedostolle tulossa).
-- Sijainti: geokoodaus Nominatimilla, jossa on 1 s rate limit; SQLite-välimuisti lisätään, jotta peräkkäiset ajot eivät kuormita palvelua.
+- Sijainti: geokoodaus Nominatimilla, jossa on 1 s rate limit; SQLite-välimuisti (`data/geocode_cache.sqlite`, polku konfiguroitavissa `--geocode-cache`) estää turhat kyselyt. Cache on .gitignore:ssa.
 - Asemadata: Trainline CSV tai paikallinen `data/stations_fi.csv`, jos halutaan deterministinen ja nopea ajo.
 - Toimialasuodatus: whitelist + blacklist TOL-koodeille tai teksti-osumille.
 - Työntekijämäärä: erillinen CSV enrichment (`businessId,employee_count/employee_band`), jonka lähde tallennetaan raporttiin.
 
 ## Outputit
-- Excel, GeoJSON ja HTML-kartta (folium) kansioon `--out` (oletus `out/`).
+- Excel (Shortlist + haluttaessa Excluded), GeoJSON ja HTML-kartta (folium) kansioon `--out` (oletus `out/`).
 - Vakiosarakkeet (tyhjä sallittu): business_id, name, company_form, main_business_line, domicile_city/_source_city, street, post_code, city, full_address, lat, lon, nearest_station, distance_km, score, score_reasons, excluded_reason, employee_count, employee_band, employee_source, employee_gate, oppisopimus_hit, oppisopimus_class, evidence_url, evidence_snippet.
 
 ## Kehitys ja testit

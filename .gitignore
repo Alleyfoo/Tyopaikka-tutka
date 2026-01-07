@@ -10,6 +10,8 @@ __pycache__/
 dist/
 build/
 *.egg-info/
+*.sqlite
+data/geocode_cache.sqlite
 .DS_Store
 .idea/
 .vscode/

@@ -9,12 +9,13 @@ from typing import Sequence
 import pandas as pd
 
 from . import __version__
+from .distance import nearest_station_from_df
 from .geocode import geocode_address
+from . import normalize
 from .normalize import normalize_companies
 from .prh_client import fetch_companies
 from .report import export_reports
 from .stations import load_stations
-from .distance import nearest_station_from_df
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -62,6 +63,35 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument("--skip-geocode", action="store_true", help="Ohita geokoodaus (debug / nopea ajo).")
     run_parser.add_argument("--limit", type=int, default=0, help="Käsittele vain N ensimmäistä riviä (debug).")
+    run_parser.add_argument(
+        "--geocode-cache",
+        type=str,
+        default="data/geocode_cache.sqlite",
+        help="SQLite-välimuisti geokoodaukselle.",
+    )
+    run_parser.add_argument(
+        "--whitelist",
+        type=str,
+        default="",
+        help="Pilkuilla eroteltu toimiala-whitelist (mainBusinessLine substring).",
+    )
+    run_parser.add_argument(
+        "--blacklist",
+        type=str,
+        default="",
+        help="Pilkuilla eroteltu toimiala-blacklist (hard fail).",
+    )
+    run_parser.add_argument(
+        "--include-excluded",
+        action="store_true",
+        help="Sisällytä poissuljetut rivit Exceliin (Excluded-välilehti).",
+    )
+    run_parser.add_argument(
+        "--employee-csv",
+        type=str,
+        default=None,
+        help="Työntekijämäärä-enrichment CSV (business_id, employee_count/employee_band).",
+    )
     run_parser.add_argument(
         "--out",
         type=str,
@@ -115,7 +145,7 @@ def run_command(args: argparse.Namespace) -> int:
         providers = []
         cache_hits = []
         for addr in df["full_address"]:
-            lat, lon, provider, cached = geocode_address(addr)
+            lat, lon, provider, cached = geocode_address(addr, cache_path=Path(args.geocode_cache))
             lats.append(lat)
             lons.append(lon)
             providers.append(provider)
@@ -124,6 +154,8 @@ def run_command(args: argparse.Namespace) -> int:
         df["lon"] = lons
         df["geocode_provider"] = providers
         df["geocode_cache_hit"] = cache_hits
+
+    df = normalize.deduplicate_companies(df)
 
     stations_df = None
     try:
@@ -149,8 +181,110 @@ def run_command(args: argparse.Namespace) -> int:
     df["nearest_station"] = nearest_names
     df["distance_km"] = nearest_dists
 
-    export_reports(df, args.out)
-    print(f"Raportit kirjoitettu hakemistoon: {args.out}")
+    from .filters import exclude_company, industry_pass
+    from .scoring import score_company
+    from .storage import load_employee_enrichment
+
+    excluded_flags = []
+    excluded_reasons = []
+    industry_whitelist_hit = []
+    industry_blacklist_hit = []
+    industry_reason_col = []
+
+    wl = [s.strip() for s in (args.whitelist or "").split(",") if s.strip()]
+    bl = [s.strip() for s in (args.blacklist or "").split(",") if s.strip()]
+
+    for _, row in df.iterrows():
+        excl, reason = exclude_company(row.to_dict())
+        excluded_flags.append(excl)
+        excluded_reasons.append(reason)
+        ind_pass, ind_reason, hard_fail = industry_pass(row.to_dict(), wl, bl)
+        industry_whitelist_hit.append(ind_reason and ind_reason.startswith("whitelist"))
+        industry_blacklist_hit.append(ind_reason and ind_reason.startswith("blacklist"))
+        if hard_fail and not excl and ind_reason:
+            excl = True
+            reason = ind_reason
+            excluded_flags[-1] = excl
+            excluded_reasons[-1] = reason
+        industry_reason_col.append(ind_reason)
+
+    df["excluded_reason"] = excluded_reasons
+
+    # Employee enrichment
+    enrichment = {}
+    if args.employee_csv:
+        try:
+            enrichment = load_employee_enrichment(args.employee_csv)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            print(f"Työntekijäenrichment epäonnistui: {exc}")
+
+    employee_counts = []
+    employee_bands = []
+    employee_sources = []
+    employee_gate = []
+    for _, row in df.iterrows():
+        bid = str(row.get("business_id") or "")
+        if bid and bid in enrichment:
+            enr = enrichment[bid]
+            cnt = enr.get("employee_count")
+            band = enr.get("employee_band")
+            source = enr.get("employee_source", "csv")
+            employee_counts.append(cnt if pd.notna(cnt) else None)
+            employee_bands.append(band if pd.notna(band) else None)
+            employee_sources.append(source)
+            if cnt is not None and pd.notna(cnt):
+                try:
+                    gate = "pass" if float(cnt) >= 5 else "fail"
+                except (TypeError, ValueError):
+                    gate = "unknown"
+            elif band:
+                gate = "unknown"
+            else:
+                gate = "unknown"
+        else:
+            employee_counts.append(None)
+            employee_bands.append(None)
+            employee_sources.append(None)
+            gate = "unknown"
+        employee_gate.append(gate)
+        if gate == "fail":
+            reason = "employee_lt_5"
+            excluded_reasons[df.index.get_loc(row.name)] = reason
+            excluded_flags[df.index.get_loc(row.name)] = True
+
+    df["employee_count"] = employee_counts
+    df["employee_band"] = employee_bands
+    df["employee_source"] = employee_sources
+    df["employee_gate"] = employee_gate
+
+    scores = []
+    score_reasons = []
+    for excl, row, wl_hit, bl_hit in zip(excluded_flags, df.iterrows(), industry_whitelist_hit, industry_blacklist_hit):
+        _, r = row
+        s, reasons = score_company(
+            r.to_dict(),
+            radius_km=args.radius_km,
+            industry_whitelist_hit=bool(wl_hit),
+            industry_blacklist_hit=bool(bl_hit),
+            excluded=bool(excl),
+        )
+        scores.append(s)
+        score_reasons.append(reasons)
+    df["score"] = scores
+    df["score_reasons"] = score_reasons
+
+    df["excluded_reason"] = excluded_reasons
+
+    shortlist = df[df["excluded_reason"].isna()]
+    shortlist = shortlist.sort_values(["score", "distance_km"], ascending=[False, True]).reset_index(drop=True)
+    shortlist["rank"] = shortlist.index + 1
+
+    excluded_df = None
+    if args.include_excluded:
+        excluded_df = df[df["excluded_reason"].notna()].copy()
+
+    export_reports(shortlist, args.out, excluded=excluded_df)
+    print(f"Shortlist: {len(shortlist)}; excluded: {len(df) - len(shortlist)}; raportit: {args.out}")
     return 0
 
 
