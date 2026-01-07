@@ -28,6 +28,7 @@ Työkalu, joka kokoaa shortlistan työnantajista (Uusimaa + Lahti/Päijät-Häme
 - Asemadata: Trainline CSV tai paikallinen `data/stations_fi.csv`, jos halutaan deterministinen ja nopea ajo.
 - Toimialasuodatus: whitelist + blacklist TOL-koodeille tai teksti-osumille.
 - Työntekijämäärä: erillinen CSV enrichment (`businessId,employee_count/employee_band`), jonka lähde tallennetaan raporttiin.
+- Job-diff fingerprint normalisoi yleistä kohinaa (case/whitespace ja esim. “, Finland”) vähentääkseen turhia “new job” -hälytyksiä.
 
 ## Outputit
 - Excel (Shortlist + haluttaessa Excluded), GeoJSON ja HTML-kartta (folium) kansioon `--out` (oletus `out/`).

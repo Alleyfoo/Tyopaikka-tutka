@@ -20,7 +20,7 @@ class RobotsChecker:
             parser.read()
         except Exception:
             parser = RobotFileParser()
-            parser.parse([])  # allow all
+            parser.parse([])  # allow all (fail-open) but mark unavailable via flag if needed
         return parser
 
     def get_parser(self, domain: str) -> RobotFileParser:
