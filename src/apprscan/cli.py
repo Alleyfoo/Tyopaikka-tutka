@@ -74,6 +74,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Jobs diff -tiedosto (uudet paikat).",
     )
     watch_parser.add_argument(
+        "--profile",
+        type=str,
+        default=None,
+        help="Profiilin nimi (config/profiles.yaml) watch-filttereille.",
+    )
+    watch_parser.add_argument(
         "--include-tags",
         type=str,
         default="",
@@ -550,12 +556,20 @@ def jobs_command(args: argparse.Namespace) -> int:
 
 def watch_command(args: argparse.Namespace) -> int:
     from .watch import generate_watch_report
+    from .profiles import load_profiles, apply_profile
 
     run_path = Path(args.run_xlsx)
     diff_path = Path(args.jobs_diff)
     if not diff_path.exists():
         print(f"Jobs diff not found: {diff_path}")
         return 1
+
+    profile_args = {}
+    if args.profile:
+        profiles = load_profiles()
+        profile_args = apply_profile(args.profile, profiles, {})
+        if not profile_args:
+            print(f"Profile '{args.profile}' not found; continuing without profile.")
 
     shortlist_df = None
     if run_path.exists():
@@ -564,8 +578,24 @@ def watch_command(args: argparse.Namespace) -> int:
         except Exception as exc:  # pragma: no cover - defensive logging
             print(f"Shortlist reading failed: {exc}")
 
+    kwargs = {
+        "include_tags": (profile_args.get("include_tags") or args.include_tags or "").split(",")
+        if (profile_args.get("include_tags") or args.include_tags)
+        else [],
+        "exclude_keywords": (profile_args.get("exclude_tags") or args.exclude_tags or "").split(",")
+        if (profile_args.get("exclude_tags") or args.exclude_tags)
+        else [],
+        "max_items": int(profile_args.get("max_items") or args.max_items or 0),
+        "min_score": float(profile_args["min_score"]) if profile_args.get("min_score") is not None else args.min_score,
+        "max_distance_km": float(profile_args["max_distance_km"])
+        if profile_args.get("max_distance_km") is not None
+        else args.max_distance_km,
+        "stations": (profile_args.get("stations") or args.stations or "").split(",")
+        if (profile_args.get("stations") or args.stations)
+        else [],
+    }
     jobs_diff = pd.read_excel(diff_path)
-    generate_watch_report(shortlist_df, jobs_diff, Path(args.out))
+    generate_watch_report(shortlist_df, jobs_diff, Path(args.out), **kwargs)
     print(f"Watch report written to {args.out}")
     return 0
 

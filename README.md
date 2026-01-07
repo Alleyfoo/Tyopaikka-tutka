@@ -22,6 +22,7 @@ Työkalu, joka kokoaa shortlistan työnantajista (Uusimaa + Lahti/Päijät-Häme
   `apprscan run --cities Helsinki --employee-csv employees.csv --out out/`\
   `apprscan jobs --companies out/companies.xlsx --domains domains.csv --out out/jobs --max-domains 100 --max-pages-per-domain 20 --rate-limit 1.0`\
   `python scripts/pipeline.py --cities Helsinki,Espoo,Vantaa,Lahti --include-excluded` (ajaa run -> jobs -> run activityllä -> master.xlsx -> watch_report.txt)
+- Profiilit: `config/profiles.yaml` (esim. commute_default, data_junior, apprenticeship); käytä `--profile` pipeline/watch -komennoissa.
 
 ## Konfiguraatio ja oletukset
 - Kaupungit: CSV-lista `--cities`-argumentissa (tuki config-tiedostolle tulossa).

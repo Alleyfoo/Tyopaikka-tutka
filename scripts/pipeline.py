@@ -7,6 +7,8 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
+from apprscan.profiles import load_profiles
+
 
 def run_cmd(cmd: list[str]) -> None:
     print(" ".join(cmd))
@@ -64,7 +66,13 @@ def main() -> int:
     parser.add_argument("--master-xlsx", type=str, default=None, help="Master workbook path (default out/master_<date>.xlsx).")
     parser.add_argument("--watch-out", type=str, default=None, help="Watch report path (default out/watch_report_<date>.txt).")
     parser.add_argument("--include-excluded", action="store_true", help="Include excluded in final master.")
+    parser.add_argument("--profile", type=str, default=None, help="Profile name from config/profiles.yaml.")
     args = parser.parse_args()
+
+    profile_cfg = {}
+    if args.profile:
+        profiles = load_profiles()
+        profile_cfg = profiles.get(args.profile, {})
 
     ts = datetime.utcnow().strftime("%Y%m%d")
     run_out = Path(args.run_out or f"out/run_{ts}")
@@ -74,6 +82,9 @@ def main() -> int:
     known_jobs = Path(args.known_jobs)
 
     # Step 1: run (initial)
+    # Apply profile defaults to run args
+    if profile_cfg.get("radius_km") is not None:
+        args.radius_km = float(profile_cfg["radius_km"])
     run_cmd(build_common_run_args(args) + ["--out", str(run_out)])
 
     # Step 2: jobs
@@ -119,6 +130,36 @@ def main() -> int:
             str(jobs_out / "diff.xlsx"),
             "--out",
             str(watch_path),
+            *(
+                ["--include-tags", str(profile_cfg.get("include_tags"))]
+                if profile_cfg.get("include_tags")
+                else []
+            ),
+            *(
+                ["--exclude-tags", str(profile_cfg.get("exclude_tags"))]
+                if profile_cfg.get("exclude_tags")
+                else []
+            ),
+            *(
+                ["--min-score", str(profile_cfg.get("min_score"))]
+                if profile_cfg.get("min_score") is not None
+                else []
+            ),
+            *(
+                ["--max-distance-km", str(profile_cfg.get("max_distance_km"))]
+                if profile_cfg.get("max_distance_km") is not None
+                else []
+            ),
+            *(
+                ["--max-items", str(profile_cfg.get("max_items"))]
+                if profile_cfg.get("max_items") is not None
+                else []
+            ),
+            *(
+                ["--stations", str(profile_cfg.get("stations"))]
+                if profile_cfg.get("stations")
+                else []
+            ),
         ]
     )
 

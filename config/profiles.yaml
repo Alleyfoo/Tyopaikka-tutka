@@ -1,0 +1,15 @@
+commute_default:
+  radius_km: 1.0
+  max_distance_km: 2.0
+  stations: "Pasila,Helsinki"
+
+data_junior:
+  include_tags: "data"
+  exclude_tags: "senior,lead,principal"
+  min_score: 5
+  max_items: 50
+
+apprenticeship:
+  include_tags: "oppisopimus,intern,trainee"
+  exclude_tags: "senior,lead,principal"
+  min_score: 0

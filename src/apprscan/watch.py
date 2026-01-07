@@ -147,17 +147,24 @@ def generate_watch_report(
     bid_series = new_jobs["company_business_id"]
     if "business_id" in new_jobs.columns:
         bid_series = bid_series.fillna(new_jobs["business_id"])
-    counts = (
-        pd.DataFrame(filtered_jobs_sorted)
-        .assign(bid=bid_series.iloc[: len(filtered_jobs_sorted)] if len(bid_series) else None)
-        .groupby("bid")
-        .size()
-        .reset_index(name="count")
-        .sort_values("count", ascending=False)
-    )
-    for _, r in counts.iterrows():
-        bid = str(r["bid"])
-        name = lookup.get(bid, {}).get("name") or ""
-        lines.append(f"- {name} ({bid}): {int(r['count'])}")
+    if filtered_jobs_sorted:
+        filtered_df = pd.DataFrame(filtered_jobs_sorted)
+        if "company_business_id" in filtered_df.columns:
+            bid_series = filtered_df["company_business_id"]
+            if "business_id" in filtered_df.columns:
+                bid_series = bid_series.fillna(filtered_df["business_id"])
+        else:
+            bid_series = pd.Series([])
+        counts = (
+            filtered_df.assign(bid=bid_series if len(filtered_df) else None)
+            .groupby("bid")
+            .size()
+            .reset_index(name="count")
+            .sort_values("count", ascending=False)
+        )
+        for _, r in counts.iterrows():
+            bid = str(r["bid"])
+            name = lookup.get(bid, {}).get("name") or ""
+            lines.append(f"- {name} ({bid}): {int(r['count'])}")
 
     out_path.write_text("\n".join(lines), encoding="utf-8")
