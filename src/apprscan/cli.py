@@ -27,6 +27,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="command", required=False)
 
+    # Jobs subcommand
+    jobs_parser = subparsers.add_parser(
+        "jobs",
+        help="Hae työpaikat yritysten urasivuilta.",
+        description="Crawlaa urasivuja (domain mapping + heuristiikat) ja normalisoi JobPosting-rivit.",
+    )
+    jobs_parser.add_argument("--companies", type=str, required=True, help="Yritystiedosto (xlsx/csv/parquet).")
+    jobs_parser.add_argument("--domains", type=str, default=None, help="Domain mapping CSV (business_id,domain).")
+    jobs_parser.add_argument("--out", type=str, default="out/jobs", help="Output-hakemisto.")
+    jobs_parser.add_argument("--max-domains", type=int, default=300, help="Maksimi domainit per ajo.")
+    jobs_parser.add_argument(
+        "--max-pages-per-domain", type=int, default=30, help="Maksimi sivut per domain (guardrail)."
+    )
+    jobs_parser.set_defaults(func=jobs_command)
+
     run_parser = subparsers.add_parser(
         "run",
         help="Suorita haku ja raportointi.",
@@ -285,6 +300,36 @@ def run_command(args: argparse.Namespace) -> int:
 
     export_reports(shortlist, args.out, excluded=excluded_df)
     print(f"Shortlist: {len(shortlist)}; excluded: {len(df) - len(shortlist)}; raportit: {args.out}")
+    return 0
+
+
+def jobs_command(args: argparse.Namespace) -> int:
+    from .jobs import crawl_jobs_for_companies, load_domain_mapping, write_jobs_outputs
+
+    # Load companies
+    companies_path = Path(args.companies)
+    if not companies_path.exists():
+        print(f"Companies file not found: {companies_path}")
+        return 1
+    if companies_path.suffix.lower() in [".xlsx", ".xls"]:
+        companies_df = pd.read_excel(companies_path)
+    elif companies_path.suffix.lower() in [".csv"]:
+        companies_df = pd.read_csv(companies_path)
+    elif companies_path.suffix.lower() in [".parquet"]:
+        companies_df = pd.read_parquet(companies_path)
+    else:
+        print("Unsupported companies file format (use xlsx/csv/parquet).")
+        return 1
+
+    domain_map = load_domain_mapping(args.domains)
+    jobs_df, stats_df = crawl_jobs_for_companies(
+        companies_df,
+        domain_map,
+        max_domains=args.max_domains,
+        max_pages_per_domain=args.max_pages_per_domain,
+    )
+    write_jobs_outputs(jobs_df, stats_df, args.out)
+    print(f"Jobs found: {len(jobs_df)}; stats rows: {len(stats_df)}; output: {args.out}")
     return 0
 
 
