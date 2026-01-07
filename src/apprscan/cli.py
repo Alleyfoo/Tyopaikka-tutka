@@ -56,6 +56,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     jobs_parser.set_defaults(func=jobs_command)
 
+    watch_parser = subparsers.add_parser(
+        "watch",
+        help="Tuota tekstiraportti uusista työpaikoista (diff).",
+        description="Lue master.xlsx ja jobs diff, tuota watch_report.txt listaten uudet työpaikat.",
+    )
+    watch_parser.add_argument(
+        "--run-xlsx",
+        type=str,
+        default="out/master.xlsx",
+        help="Master-työkirja, josta luetaan Shortlist (score/distance).",
+    )
+    watch_parser.add_argument(
+        "--jobs-diff",
+        type=str,
+        default="out/jobs/diff.xlsx",
+        help="Jobs diff -tiedosto (uudet paikat).",
+    )
+    watch_parser.add_argument(
+        "--out",
+        type=str,
+        default="out/watch_report.txt",
+        help="Tulostiedosto (tekstiraportti).",
+    )
+    watch_parser.set_defaults(func=watch_command)
+
     run_parser = subparsers.add_parser(
         "run",
         help="Suorita haku ja raportointi.",
@@ -499,6 +524,28 @@ def jobs_command(args: argparse.Namespace) -> int:
         f"Jobs found: {len(jobs_df)} (new: {len(new_jobs)}); "
         f"domains: {len(stats_df)}; output: {args.out}"
     )
+    return 0
+
+
+def watch_command(args: argparse.Namespace) -> int:
+    from .watch import generate_watch_report
+
+    run_path = Path(args.run_xlsx)
+    diff_path = Path(args.jobs_diff)
+    if not diff_path.exists():
+        print(f"Jobs diff not found: {diff_path}")
+        return 1
+
+    shortlist_df = None
+    if run_path.exists():
+        try:
+            shortlist_df = pd.read_excel(run_path, sheet_name="Shortlist")
+        except Exception as exc:  # pragma: no cover - defensive logging
+            print(f"Shortlist reading failed: {exc}")
+
+    jobs_diff = pd.read_excel(diff_path)
+    generate_watch_report(shortlist_df, jobs_diff, Path(args.out))
+    print(f"Watch report written to {args.out}")
     return 0
 
 
