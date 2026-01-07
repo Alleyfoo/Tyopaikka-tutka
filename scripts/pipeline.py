@@ -4,10 +4,17 @@ from __future__ import annotations
 
 import argparse
 import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 
-from apprscan.profiles import load_profiles
+try:
+    from apprscan.profiles import load_profiles
+except ModuleNotFoundError:
+    repo_root = Path(__file__).resolve().parents[1]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    from apprscan.profiles import load_profiles  # type: ignore
 
 
 def run_cmd(cmd: list[str]) -> None:
