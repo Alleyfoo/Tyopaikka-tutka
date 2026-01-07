@@ -280,22 +280,33 @@ def apply_diff(jobs_df: pd.DataFrame, known_path: Path) -> Tuple[pd.DataFrame, p
     known_urls: set[str] = set()
     known_fps: set[int] = set()
     if known_path.exists():
+        known_df = None
         try:
             known_df = pd.read_parquet(known_path)
-        except ImportError:
-            known_df = pd.read_csv(known_path)
-        if "job_url" in known_df.columns:
-            known_urls = set(known_df["job_url"].astype(str))
-        if "job_fingerprint" in known_df.columns:
-            known_fps = set(known_df["job_fingerprint"].astype(int))
-    else:
-        csv_alt = known_path.with_suffix(".csv")
-        if csv_alt.exists():
-            known_df = pd.read_csv(csv_alt)
+        except Exception:
+            try:
+                known_df = pd.read_csv(known_path, encoding="utf-8", engine="python", on_bad_lines="skip")
+            except Exception:
+                try:
+                    known_df = pd.read_csv(known_path, encoding="latin1", engine="python", on_bad_lines="skip")
+                except Exception:
+                    known_df = None
+        if known_df is not None:
             if "job_url" in known_df.columns:
                 known_urls = set(known_df["job_url"].astype(str))
             if "job_fingerprint" in known_df.columns:
-                known_fps = set(known_df["job_fingerprint"].astype(int))
+                known_fps = set(pd.to_numeric(known_df["job_fingerprint"], errors="coerce").dropna().astype(int))
+    else:
+        csv_alt = known_path.with_suffix(".csv")
+        if csv_alt.exists():
+            try:
+                known_df = pd.read_csv(csv_alt, encoding="utf-8", engine="python", on_bad_lines="skip")
+            except Exception:
+                known_df = pd.read_csv(csv_alt, encoding="latin1", engine="python", on_bad_lines="skip")
+            if "job_url" in known_df.columns:
+                known_urls = set(known_df["job_url"].astype(str))
+            if "job_fingerprint" in known_df.columns:
+                known_fps = set(pd.to_numeric(known_df["job_fingerprint"], errors="coerce").dropna().astype(int))
 
     jobs_df["is_new"] = ~jobs_df["job_url"].astype(str).isin(known_urls) & ~jobs_df[
         "job_fingerprint"
