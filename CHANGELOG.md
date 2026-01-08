@@ -1,6 +1,12 @@
 # Changelog
 
-## v0.5.0 (unreleased)
+## v0.6.0 (unreleased)
+- Jobs view: selected company dropdown + open in Inspector.
+- Inspector: next/prev navigation and "opened from jobs" badge.
+- Focus mode: one-company view with banner + sidebar clear button.
+- Sidebar status line shows focus + view context + pending count.
+
+## v0.5.0
 - Streamlit editor: presets, safe commit/undo, outreach export with meta sheet.
 - One “effective view” for UI/CLI so map/watch use the same filters.
 - City filters in Streamlit and CLI, with Mäntsälä/Mantsala normalization.

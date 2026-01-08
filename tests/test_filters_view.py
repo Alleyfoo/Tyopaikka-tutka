@@ -54,3 +54,11 @@ def test_filters_city():
     filtered = filter_data(df, opts)
     assert len(filtered) == 1
     assert filtered.iloc[0]["business_id"] == "2"
+
+
+def test_filters_focus_business_id():
+    df = build_df()
+    opts = FilterOptions(include_housing=True, focus_business_id="2")
+    filtered = filter_data(df, opts)
+    assert len(filtered) == 1
+    assert filtered.iloc[0]["business_id"] == "2"

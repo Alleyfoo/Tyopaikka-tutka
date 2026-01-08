@@ -12,6 +12,8 @@ import streamlit as st
 import pydeck as pdk
 
 from apprscan.artifacts import find_latest_diff, find_latest_master, artifact_date
+from apprscan.analytics import io as a_io
+from apprscan.analytics import summarize
 from apprscan.curation import (
     apply_curation,
     append_audit,
@@ -26,6 +28,8 @@ from apprscan.curation import (
     write_curation_with_backup,
 )
 from apprscan.filters_view import FilterOptions, filter_data
+from apprscan.inspector import explain_company, select_company_jobs, get_prev_next
+from apprscan.jobs_view import join_new_jobs_with_companies
 
 
 def _resolve_path(path_str: str | None, finder) -> Path | None:
@@ -34,14 +38,48 @@ def _resolve_path(path_str: str | None, finder) -> Path | None:
     return finder() or None
 
 
+def _file_mtime(path: Path | None) -> float:
+    if path and path.exists():
+        return path.stat().st_mtime
+    return 0.0
+
+
+@st.cache_data(show_spinner=False)
+def _cached_read_master(path_str: str, mtime: float) -> pd.DataFrame:
+    return read_master(Path(path_str))
+
+
+@st.cache_data(show_spinner=False)
+def _cached_read_curation(path_str: str, mtime: float) -> pd.DataFrame:
+    return read_curation(Path(path_str))
+
+
+@st.cache_data(show_spinner=False)
+def _cached_read_diff(path_str: str, mtime: float) -> pd.DataFrame:
+    p = Path(path_str)
+    if p.suffix.lower() in {".xlsx", ".xls"}:
+        return pd.read_excel(p)
+    if p.suffix.lower() == ".jsonl":
+        return pd.read_json(p, lines=True)
+    return pd.DataFrame()
+
+
+@st.cache_data(show_spinner=False)
+def _cached_read_master_sheet(path_str: str, mtime: float, sheet: str) -> pd.DataFrame:
+    return pd.read_excel(path_str, sheet_name=sheet)
+
+
 def load_data(master_path: Path, curation_path: Path | None):
-    master_df = read_master(master_path)
-    curation_df = read_curation(curation_path) if curation_path else read_curation("out/curation/master_curation.csv")
+    master_df = _cached_read_master(str(master_path), _file_mtime(master_path))
+    cur_path = curation_path or Path("out/curation/master_curation.csv")
+    curation_df = _cached_read_curation(str(cur_path), _file_mtime(cur_path))
     return master_df, curation_df
 
 
 def describe_filters(opts: FilterOptions) -> list[str]:
     items = []
+    if opts.focus_business_id:
+        items.append(f"Focus: {opts.focus_business_id}")
     if opts.industries:
         items.append(f"Industry: {', '.join(opts.industries)}")
     if opts.statuses:
@@ -72,6 +110,30 @@ def artifact_dates_info(master_path: Path | None, diff_path: Path | None) -> tup
     }
     mismatch = bool(dates["master"] and dates["diff"] and dates["master"] != dates["diff"])
     return dates, mismatch
+
+
+def load_diff_df(diff_path: Path | None) -> pd.DataFrame:
+    if diff_path is None or not diff_path.exists():
+        return pd.DataFrame()
+    return _cached_read_diff(str(diff_path), _file_mtime(diff_path))
+
+
+def load_jobs_all(master_path: Path | None) -> pd.DataFrame:
+    if master_path is None or not master_path.exists():
+        return pd.DataFrame()
+    try:
+        return _cached_read_master_sheet(str(master_path), _file_mtime(master_path), "Jobs_All")
+    except Exception:
+        return pd.DataFrame()
+
+
+def load_stats_df(master_path: Path | None) -> pd.DataFrame:
+    if master_path is None or not master_path.exists():
+        return pd.DataFrame()
+    try:
+        return _cached_read_master_sheet(str(master_path), _file_mtime(master_path), "Crawl_Stats")
+    except Exception:
+        return pd.DataFrame()
 
 
 def merge_edits(*edits_lists: list[dict]) -> list[dict]:
@@ -220,6 +282,173 @@ def prepare_map(filtered_df: pd.DataFrame, radius: float):
     st.pydeck_chart(deck)
 
 
+def render_overview(
+    view_df: pd.DataFrame,
+    filtered_df: pd.DataFrame,
+    diff_df: pd.DataFrame,
+    jobs_all_df: pd.DataFrame,
+    stats_df: pd.DataFrame,
+):
+    st.subheader("Overview")
+    kpi_df = summarize.summarize_kpi(diff_df, filtered_df, stats_df)
+    kpi = kpi_df.iloc[0].to_dict() if not kpi_df.empty else {}
+    cols = st.columns(4)
+    cols[0].metric("New jobs", kpi.get("new_jobs_total", 0) or 0)
+    cols[1].metric("Recruiting active", kpi.get("companies_recruiting_active", 0) or 0)
+    cols[2].metric("Domains crawled", kpi.get("domains_crawled", 0) or 0)
+    cols[3].metric("Domains with jobs", kpi.get("domains_with_jobs", 0) or 0)
+    if kpi.get("top_skip_reasons"):
+        st.caption(f"Top skip reasons: {kpi.get('top_skip_reasons')}")
+
+    st.subheader("Top companies right now")
+    top_source = filtered_df.copy()
+    if "recruiting_active" in top_source.columns:
+        top_source = top_source[top_source["recruiting_active"] == True]  # noqa: E712
+    if "hide_flag" in top_source.columns:
+        top_source = top_source[top_source["hide_flag"] == False]  # noqa: E712
+    if "status" in top_source.columns:
+        top_source = top_source[top_source["status"] != "excluded"]
+    top_df = summarize.summarize_top_companies(top_source, diff_df, jobs_all_df, top_n=10)
+    st.dataframe(top_df, use_container_width=True)
+    if not top_df.empty:
+        inspect_id = st.selectbox(
+            "Open in Inspector",
+            options=top_df["business_id"].astype(str).tolist(),
+            format_func=lambda bid: f"{top_df[top_df['business_id'].astype(str)==bid]['name'].iloc[0]} ({bid})",
+        )
+        if st.button("Inspect selected"):
+            st.session_state["selected_bid"] = inspect_id
+            st.session_state["page"] = "Inspector"
+            st.session_state["jobs_context"] = None
+            st.experimental_rerun()
+
+    st.subheader("New jobs by tag / industry / station")
+    tags_df = summarize.summarize_tags(diff_df, filtered_df).head(10)
+    stations_df = summarize.summarize_stations(filtered_df, diff_df).head(10)
+    industry_df = summarize.summarize_industry(filtered_df, diff_df).head(10)
+    cols = st.columns(3)
+    cols[0].caption("Tags")
+    cols[0].dataframe(tags_df, use_container_width=True)
+    cols[1].caption("Stations")
+    cols[1].dataframe(stations_df, use_container_width=True)
+    cols[2].caption("Industry")
+    cols[2].dataframe(industry_df, use_container_width=True)
+
+    st.subheader("Data quality alerts")
+    alerts = {
+        "missing_website": int(filtered_df["website.url"].isna().sum()) if "website.url" in filtered_df.columns else None,
+        "missing_latlon": int(
+            filtered_df[filtered_df["lat"].isna() | filtered_df["lon"].isna()].shape[0]
+        )
+        if {"lat", "lon"}.issubset(filtered_df.columns)
+        else None,
+        "missing_industry": int(
+            filtered_df["industry_effective"].isna().sum()
+        )
+        if "industry_effective" in filtered_df.columns
+        else None,
+    }
+    st.write(alerts)
+
+
+def render_inspector(
+    view_df: pd.DataFrame,
+    filtered_df: pd.DataFrame,
+    diff_df: pd.DataFrame,
+    jobs_all_df: pd.DataFrame,
+    opts: FilterOptions,
+):
+    st.subheader("Inspector")
+    jobs_ctx = st.session_state.get("jobs_context") or {}
+    if jobs_ctx.get("source") == "jobs":
+        st.info(f"Opened from Jobs · New jobs: {jobs_ctx.get('job_count', 0)}")
+    selected_bid = st.session_state.get("selected_bid")
+    view_ids = [str(x) for x in st.session_state.get("view_ids", [])]
+    base_df = filtered_df if not filtered_df.empty else view_df
+    options = base_df["business_id"].astype(str).tolist()
+    if selected_bid and selected_bid not in options and "business_id" in view_df.columns:
+        if str(selected_bid) in view_df["business_id"].astype(str).tolist():
+            options = [str(selected_bid)] + options
+    bid_to_name = dict(zip(view_df["business_id"].astype(str), view_df.get("name", "")))
+    default_bid = selected_bid if selected_bid in options else None
+    if not options:
+        st.info("No companies available for inspection.")
+        return
+    selected_bid = st.selectbox(
+        "Select company",
+        options=options,
+        index=options.index(default_bid) if default_bid else 0,
+        format_func=lambda b: f"{bid_to_name.get(b, '')} ({b})",
+    )
+    st.session_state["selected_bid"] = selected_bid
+    prev_bid, next_bid = get_prev_next(view_ids, selected_bid)
+    nav_cols = st.columns(3)
+    if nav_cols[0].button("Prev") and prev_bid:
+        st.session_state["selected_bid"] = prev_bid
+        st.experimental_rerun()
+    nav_cols[1].button("Current")
+    if nav_cols[2].button("Next") and next_bid:
+        st.session_state["selected_bid"] = next_bid
+        st.experimental_rerun()
+    if selected_bid not in view_ids:
+        st.warning("Selected company is outside the current filtered set.")
+        if st.button("Reset selection to first visible"):
+            st.session_state["selected_bid"] = view_ids[0] if view_ids else None
+            st.experimental_rerun()
+        if st.button("Reset filters to Default"):
+            apply_preset_to_state("Default")
+            st.session_state["preset"] = "Default"
+            st.experimental_rerun()
+    row = base_df[base_df["business_id"].astype(str) == selected_bid].iloc[0]
+    st.markdown(f"**{row.get('name','')}** (`{selected_bid}`)")
+    if row.get("website.url"):
+        st.markdown(f"[Website]({row.get('website.url')})")
+
+    facts = {
+        "city": row.get("city") or row.get("addresses.0.city") or row.get("_source_city") or row.get("domicile"),
+        "nearest_station": row.get("nearest_station"),
+        "distance_km": row.get("distance_km"),
+        "industry_raw": row.get("industry_raw"),
+        "industry_effective": row.get("industry_effective"),
+        "tags_raw": row.get("tags_raw"),
+        "tags_effective": row.get("tags_effective"),
+        "status": row.get("status"),
+        "hide_flag": row.get("hide_flag"),
+        "note": row.get("note"),
+    }
+    st.write(facts)
+    if opts.cities:
+        st.caption(f"City filter matched: input={', '.join(opts.cities)} / data={facts.get('city')}")
+
+    st.subheader("Score & reasons")
+    score_val = row.get("score")
+    st.write({"score": score_val, "score_reasons": row.get("score_reasons"), "excluded_reason": row.get("excluded_reason")})
+    if row.get("score_reasons"):
+        reasons = [r.strip() for r in str(row.get("score_reasons")).replace(",", ";").split(";") if r.strip()]
+        st.write("Reasons:", reasons)
+
+    expl = explain_company(row, opts)
+    if expl["passes"]:
+        st.success(f"Passes filters: {expl['reasons']}")
+    else:
+        st.warning(f"Fails filters: {expl['fails']}")
+
+    st.subheader("Jobs")
+    new_jobs = select_company_jobs(selected_bid, diff_df)
+    all_jobs = select_company_jobs(selected_bid, jobs_all_df)
+    expand_new = jobs_ctx.get("source") == "jobs"
+    with st.expander("New jobs", expanded=expand_new):
+        if not new_jobs.empty:
+            st.dataframe(new_jobs[["job_title", "job_url", "tags", "location_text"]].head(20), use_container_width=True)
+        else:
+            st.caption("No new jobs for this company.")
+    with st.expander("All jobs", expanded=not expand_new):
+        if not all_jobs.empty:
+            st.dataframe(all_jobs[["job_title", "job_url", "tags", "location_text"]].head(50), use_container_width=True)
+        else:
+            st.caption("No jobs available.")
+
+
 def main():
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--master", help="Path to master Excel (Shortlist sheet).")
@@ -239,6 +468,15 @@ def main():
     master_input = st.sidebar.text_input("Master path", value=str(master_path) if master_path else "")
     diff_input = st.sidebar.text_input("Jobs diff path (optional)", value=str(diff_path) if diff_path else "")
     curation_input = st.sidebar.text_input("Curation overlay", value=curation_default)
+    page = st.sidebar.radio("View", ["Overview", "Inspector", "Curate", "Jobs"], key="page")
+    last_page = st.session_state.get("last_page")
+    if page != "Jobs" and last_page != "Jobs":
+        if st.session_state.get("jobs_context"):
+            st.session_state["jobs_context"] = None
+    if st.session_state.get("focus_bid") and not st.session_state.get("keep_focus"):
+        if last_page and page != last_page:
+            st.session_state["focus_bid"] = None
+    st.session_state["last_page"] = page
 
     if not master_input:
         st.warning("Master path missing. Run apprscan run to generate master.xlsx or provide a path.")
@@ -291,6 +529,7 @@ def main():
     if preset_choice != st.session_state["preset"]:
         st.session_state["preset"] = preset_choice
         apply_preset_to_state(preset_choice)
+        st.session_state["focus_bid"] = None
 
     industry_sel = st.sidebar.multiselect("Industry", industries, default=st.session_state.get("filt_industries", industries), key="filt_industries")
     city_candidates = sorted(
@@ -321,6 +560,22 @@ def main():
         include_excluded=include_excluded,
         include_housing=include_housing,
         statuses=status_sel,
+        focus_business_id=st.session_state.get("focus_bid"),
+        min_score=min_score or None,
+        max_distance_km=max_distance or None,
+        include_tags=[t.strip() for t in include_tags.split(",") if t.strip()],
+        exclude_tags=[t.strip() for t in exclude_tags.split(",") if t.strip()],
+        search=search or None,
+        only_recruiting=only_recruiting,
+    )
+    opts_nofocus = FilterOptions(
+        industries=industry_sel,
+        cities=city_sel,
+        include_hidden=include_hidden,
+        include_excluded=include_excluded,
+        include_housing=include_housing,
+        statuses=status_sel,
+        focus_business_id=None,
         min_score=min_score or None,
         max_distance_km=max_distance or None,
         include_tags=[t.strip() for t in include_tags.split(",") if t.strip()],
@@ -330,15 +585,147 @@ def main():
     )
 
     filtered_df = filter_data(view_df, opts)
+    filtered_df_no_focus = filter_data(view_df, opts_nofocus)
+    st.session_state["view_ids"] = filtered_df["business_id"].astype(str).tolist()
+    st.session_state["view_label"] = "; ".join(describe_filters(opts))
+    if "pending_extra" not in st.session_state:
+        st.session_state["pending_extra"] = []
+    diff_df = load_diff_df(Path(diff_input) if diff_input else None)
+    jobs_all_df = load_jobs_all(master_path)
+    stats_df = load_stats_df(master_path)
 
     st.sidebar.caption("Active filters:\n- " + "\n- ".join(describe_filters(opts)))
+    view_ids = st.session_state.get("view_ids", [])
+    sel_bid = st.session_state.get("selected_bid")
+    if sel_bid in view_ids:
+        idx = view_ids.index(sel_bid) + 1
+        total = len(view_ids)
+        sel_name = ""
+        if "name" in filtered_df.columns:
+            match = filtered_df[filtered_df["business_id"].astype(str) == sel_bid]
+            if not match.empty:
+                sel_name = match.iloc[0].get("name", "")
+        st.sidebar.caption(f"Selected: {sel_name} ({idx}/{total})")
+    focus_bid = st.session_state.get("focus_bid")
+    if focus_bid:
+        keep_tag = " [Keep]" if st.session_state.get("keep_focus") else ""
+        st.sidebar.caption(f"Focus: {focus_bid}{keep_tag}")
+        if st.sidebar.button("Clear focus", key="sidebar_clear_focus"):
+            st.session_state["focus_bid"] = None
+            st.experimental_rerun()
+    if st.session_state.get("view_label"):
+        st.sidebar.caption(f"View context: {st.session_state['view_label']}")
+    st.sidebar.caption(f"Pending edits: {len(st.session_state.get('pending_extra', []))}")
     if st.sidebar.button("Reset filters"):
         apply_preset_to_state("Default")
         st.session_state["preset"] = "Default"
+        st.session_state["focus_bid"] = None
         st.experimental_rerun()
 
+    if st.session_state.get("focus_bid"):
+        st.warning(
+            f"FOCUS MODE: Only showing {st.session_state.get('focus_bid')}",
+            icon="⚠️",
+        )
+        st.session_state["keep_focus"] = st.checkbox("Keep focus while switching views", value=True)
+        if st.button("Clear focus"):
+            st.session_state["focus_bid"] = None
+            st.experimental_rerun()
     st.markdown(f"**Visible companies:** {len(filtered_df)} / {len(view_df)} (master), using master: `{master_path.name}`")
     st.caption(f"Curation file: {curation_path}")
+
+    if page == "Overview":
+        render_overview(view_df, filtered_df, diff_df, jobs_all_df, stats_df)
+        st.stop()
+    if page == "Inspector":
+        render_inspector(view_df, filtered_df, diff_df, jobs_all_df, opts)
+        st.stop()
+    if page == "Jobs":
+        st.subheader("Jobs (new since last run)")
+        if diff_df.empty:
+            st.info("No jobs diff available.")
+            st.stop()
+        joined = join_new_jobs_with_companies(diff_df, filtered_df)
+        company_list = []
+        if "company_business_id" in joined.columns:
+            for bid, group in joined.groupby("company_business_id"):
+                bid_str = str(bid)
+                name = ""
+                if "company_name" in group.columns and group["company_name"].notna().any():
+                    name = str(group["company_name"].dropna().iloc[0])
+                elif "name" in group.columns and group["name"].notna().any():
+                    name = str(group["name"].dropna().iloc[0])
+                score = group["score"].max() if "score" in group.columns else 0
+                company_list.append(
+                    {"business_id": bid_str, "name": name, "job_count": len(group), "score": score}
+                )
+        if company_list:
+            company_df = pd.DataFrame(company_list)
+            company_df = company_df.sort_values(
+                ["job_count", "score", "name"], ascending=[False, False, True]
+            )
+            selected_company = st.selectbox(
+                "Selected company",
+                options=company_df["business_id"].tolist(),
+                format_func=lambda b: f"{company_df[company_df['business_id']==b]['name'].iloc[0]} ({b})",
+            )
+            if st.button("Open in Inspector"):
+                st.session_state["selected_bid"] = selected_company
+                st.session_state["jobs_context"] = {
+                    "source": "jobs",
+                    "opened_at": datetime.utcnow().isoformat(),
+                    "job_count": int(company_df[company_df["business_id"] == selected_company]["job_count"].iloc[0]),
+                }
+                st.session_state["page"] = "Inspector"
+                st.experimental_rerun()
+        group_mode = st.radio("Group by", ["None", "Company", "Tag"], horizontal=True)
+        if group_mode == "Company" and "company_business_id" in joined.columns:
+            st.dataframe(
+                joined.groupby("company_business_id")
+                .size()
+                .reset_index(name="new_jobs")
+                .sort_values("new_jobs", ascending=False)
+                .head(50),
+                use_container_width=True,
+            )
+        elif group_mode == "Tag" and "tags" in joined.columns:
+            tags = joined.explode("tags")
+            st.dataframe(
+                tags.groupby("tags")
+                .size()
+                .reset_index(name="new_jobs")
+                .sort_values("new_jobs", ascending=False)
+                .head(50),
+                use_container_width=True,
+            )
+        cols = [c for c in ["company_business_id", "company_name", "job_title", "tags", "job_url", "nearest_station", "distance_km", "score"] if c in joined.columns]
+        st.dataframe(joined[cols].head(200), use_container_width=True)
+        st.stop()
+
+    st.subheader("Curate toolbar")
+    view_ids = st.session_state.get("view_ids", [])
+    if view_ids:
+        if st.session_state.get("selected_bid") not in view_ids:
+            st.session_state["selected_bid"] = view_ids[0]
+        selected_bid = st.selectbox("Selected company", options=view_ids, key="selected_bid")
+        prev_bid, next_bid = get_prev_next(view_ids, selected_bid)
+        nav_cols = st.columns(5)
+        if nav_cols[0].button("Prev", disabled=prev_bid is None) and prev_bid:
+            st.session_state["selected_bid"] = prev_bid
+            st.experimental_rerun()
+        if nav_cols[1].button("Next", disabled=next_bid is None) and next_bid:
+            st.session_state["selected_bid"] = next_bid
+            st.experimental_rerun()
+        if nav_cols[2].button("Open in Inspector"):
+            st.session_state["page"] = "Inspector"
+            st.session_state["jobs_context"] = None
+            st.experimental_rerun()
+        if nav_cols[3].button("Stage Shortlist"):
+            st.session_state["pending_extra"].append({"business_id": selected_bid, "status": "shortlist"})
+        if nav_cols[4].button("Stage Exclude"):
+            st.session_state["pending_extra"].append({"business_id": selected_bid, "status": "excluded"})
+    else:
+        st.info("No rows in current filtered set.")
 
     # Inline map (read-only) for current filtered set
     st.subheader("Map (current filtered view)")
@@ -380,11 +767,9 @@ def main():
 
     # Row details + quick actions
     st.subheader("Row details / quick actions")
-    bid_options = filtered_df["business_id"].tolist()
-    bid_to_name = dict(zip(filtered_df["business_id"], filtered_df["name"]))
-    selected_bid = st.selectbox("Select company", options=bid_options, format_func=lambda b: f"{bid_to_name.get(b, '')} ({b})")
-    if selected_bid:
-        row_sel = filtered_df[filtered_df["business_id"] == selected_bid].iloc[0]
+    selected_bid = st.session_state.get("selected_bid")
+    if selected_bid and selected_bid in filtered_df["business_id"].astype(str).tolist():
+        row_sel = filtered_df[filtered_df["business_id"].astype(str) == str(selected_bid)].iloc[0]
         st.markdown(f"**{row_sel.get('name','')}** (`{selected_bid}`)")
         col1, col2 = st.columns(2)
         with col1:
@@ -424,6 +809,11 @@ def main():
             st.session_state["pending_extra"].append({"business_id": selected_bid, "hide_flag": True})
         if quick_cols[3].button("Quick: Unhide"):
             st.session_state["pending_extra"].append({"business_id": selected_bid, "hide_flag": False})
+        if st.button("Focus: this company only"):
+            st.session_state["focus_bid"] = selected_bid
+            st.experimental_rerun()
+    else:
+        st.info("Select a company using the Curate toolbar above.")
 
     # Bulk actions
     with st.expander("Bulk actions (current filtered set)", expanded=False):
@@ -517,9 +907,9 @@ def main():
         st.stop()
 
     st.subheader("New jobs (diff)")
-    if diff_input and Path(diff_input).exists():
-        diff_df = pd.read_excel(diff_input) if diff_input.endswith(".xlsx") else pd.read_json(diff_input, lines=True)
-        st.dataframe(diff_df[["company_business_id", "company_name", "job_title", "tags", "job_url"]].head(100), use_container_width=True)
+    if not diff_df.empty:
+        cols = [c for c in ["company_business_id", "company_name", "job_title", "tags", "job_url"] if c in diff_df.columns]
+        st.dataframe(diff_df[cols].head(100), use_container_width=True)
     else:
         st.caption("No diff provided.")
 

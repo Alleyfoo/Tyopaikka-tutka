@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from typing import Iterable, List
 
 import pandas as pd
 
-HOUSING_NAME_RE = re.compile(r"(?i)\b(as\.?\s*oy|asunto\s*oy|asunto-?osakeyhtio|taloyhtio)")
+from .filters import is_housing_company
 CITY_TRANSLATION = str.maketrans({"ä": "a", "ö": "o", "å": "a"})
 
 
@@ -20,6 +19,7 @@ class FilterOptions:
     include_housing: bool = False
     statuses: List[str] = field(default_factory=list)
     cities: List[str] = field(default_factory=list)
+    focus_business_id: str | None = None
     min_score: float | None = None
     max_distance_km: float | None = None
     stations: List[str] = field(default_factory=list)
@@ -44,7 +44,7 @@ def filter_data(df: pd.DataFrame, opts: FilterOptions) -> pd.DataFrame:
 
     # Housing name filter first to avoid unnecessary work.
     if not opts.include_housing and "name" in out.columns:
-        out = out[~out["name"].fillna("").str.contains(HOUSING_NAME_RE, regex=True)]
+        out = out[~out["name"].fillna("").apply(is_housing_company)]
 
     if not opts.include_hidden and "hide_flag" in out.columns:
         out = out[out["hide_flag"] == False]  # noqa: E712
@@ -102,5 +102,10 @@ def filter_data(df: pd.DataFrame, opts: FilterOptions) -> pd.DataFrame:
                 return any(needle in f for f in fields)
 
             out = out[out.apply(matches, axis=1)]
+
+    if opts.focus_business_id:
+        focus = str(opts.focus_business_id).strip()
+        if focus:
+            out = out[out["business_id"].astype(str) == focus]
 
     return out

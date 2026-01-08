@@ -29,6 +29,8 @@ class EffectiveViewResult:
 
 def describe_filters(opts: FilterOptions) -> list[str]:
     items = []
+    if opts.focus_business_id:
+        items.append(f"Focus: {opts.focus_business_id}")
     if opts.industries:
         items.append(f"Industry: {', '.join(opts.industries)}")
     if opts.cities:
