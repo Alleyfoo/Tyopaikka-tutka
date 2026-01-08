@@ -1,4 +1,4 @@
-# Apprenticeship Employer Scanner (Oppisopimushaku)
+# Work place scanner from YTJ data
 
 Browse first, crawl optional. Työkalu shortlistaukseen, karttaan ja analytiikkaan PRH/YTJ-datasta; jobs-crawl on lisäbonus, ei oletus.
 
