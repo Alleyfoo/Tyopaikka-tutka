@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.6.0 (2026-01-09)
+## v0.7.0 (2026-01-09)
 - Jobs view: selected company dropdown + open in Inspector.
 - Inspector: next/prev navigation and "opened from jobs" badge.
 - Focus mode: one-company view with banner + sidebar clear button.
