@@ -16,6 +16,8 @@ on their websites without running a full crawl.
 ## C) Build domains
 - Extract website domains from Places data:
   - `python -m apprscan domains --companies out/master_places.xlsx --out domains.csv`
+- Optional: refresh missing website URLs via Places (requires API key):
+  - `python scripts/places_details.py --master out/master_places.xlsx --out out/places_websites.csv --update-domains domains.csv`
 
 ## D) Hiring signal scan (Ollama)
 - Scan companies near a station (example: Lahti, 1 km, 50 companies):

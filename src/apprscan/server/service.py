@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 import requests
+import shutil
 
 from .. import __version__
 from ..hiring_scan import PROMPT_VERSION, _load_env_file, _repo_root, scan_domain, _resolve_git_sha
@@ -50,6 +51,22 @@ def _repo_env_file() -> Path | None:
     root = _repo_root()
     env_file = root / ".env"
     return env_file if env_file.exists() else None
+
+
+def purge_runs(out_root: Path | None = None, max_age_days: int = 30) -> int:
+    out_root = out_root or Path("out") / "runs"
+    if not out_root.exists():
+        return 0
+    cutoff = datetime.now(timezone.utc).timestamp() - max_age_days * 86400
+    purged = 0
+    for child in out_root.iterdir():
+        if not child.is_dir():
+            continue
+        stat = child.stat()
+        if stat.st_mtime < cutoff:
+            shutil.rmtree(child, ignore_errors=True)
+            purged += 1
+    return purged
 
 
 def load_scan_config(env_file: Path | None = None) -> ScanConfig:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import List
 
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
@@ -27,6 +28,21 @@ def _require_token(request: Request, x_apprscan_token: str | None = Header(defau
         raise HTTPException(status_code=401, detail="Invalid token.")
 
 
+def _rate_limit(request: Request, token: str) -> None:
+    store = getattr(request.app.state, "rate_limit", None)
+    if store is None:
+        return
+    window = int(getattr(request.app.state, "rate_limit_window_s", 60))
+    limit = int(getattr(request.app.state, "rate_limit_max", 10))
+    now = time.time()
+    hits = store.get(token, [])
+    hits = [ts for ts in hits if now - ts <= window]
+    if len(hits) >= limit:
+        raise HTTPException(status_code=429, detail="Rate limit exceeded.")
+    hits.append(now)
+    store[token] = hits
+
+
 @router.post("/ingest/maps")
 def ingest_maps(
     payload: MapsIngestRequest,
@@ -35,6 +51,7 @@ def ingest_maps(
     x_apprscan_token: str | None = Header(default=None),
 ):
     _require_token(request, x_apprscan_token)
+    _rate_limit(request, x_apprscan_token or "")
     run_id = new_run_id()
     background_tasks.add_task(
         process_maps_ingest,
