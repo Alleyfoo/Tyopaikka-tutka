@@ -16,6 +16,8 @@
 - CI enforces minimum precision/recall and max-uncertain thresholds for the hiring fixtures.
 - Added `deterministic` flag to outputs and documented the output contract.
 - Added optional companion service (`apprscan serve`) with URL-only Maps ingest and company package schema.
+- Companion service now enforces request size limits, per-token rate limits, and run retention purging.
+- Added server smoke tests plus a tracked Places helper script and sample domains fixture.
 
 Migration notes:
 - Hiring scan outputs include evidence arrays, provenance fields, and optional `deterministic`.

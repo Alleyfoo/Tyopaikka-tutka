@@ -2,6 +2,7 @@
 
 Google Places outputs are treated as local-only cache files and are not committed.
 Keep them only while actively working and purge after 30 days (or sooner if not needed).
+The companion service purges `out/runs/` on startup based on `APPRSCAN_RETENTION_DAYS`.
 
 Tracked source-of-truth fields:
 - place_id

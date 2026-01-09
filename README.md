@@ -53,6 +53,12 @@ and delivered a working scan in a short turnaround from the git baseline.
 - Run the local service (localhost-only by default):
   - `apprscan serve --host 127.0.0.1 --port 8787`
 - The service prints `APPRSCAN token: ...` which must be sent as `X-APPRSCAN-TOKEN`.
+- Optional env controls:
+  - `APPRSCAN_CORS_ORIGINS` (comma-separated allowed origins)
+  - `APPRSCAN_RATE_LIMIT_MAX` (per-token requests / window, default 10)
+  - `APPRSCAN_RATE_LIMIT_WINDOW_S` (seconds, default 60)
+  - `APPRSCAN_MAX_BODY_BYTES` (default 10240)
+  - `APPRSCAN_RETENTION_DAYS` (default 30)
 - Endpoints:
   - `POST /ingest/maps` with `{ "maps_url": "https://www.google.com/maps/..." }`
   - `GET /result/{run_id}`
