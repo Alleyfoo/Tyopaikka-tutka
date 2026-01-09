@@ -42,7 +42,7 @@ class CrawlStats:
         err_set = set(self.errors)
         if self.jobs_found and self.jobs_found > 0:
             return "ok"
-        if self.skipped_reason in {ROBOTS_DISALLOW_ALL, ROBOTS_DISALLOW_URL, "http_403"} or "http_403" in err_set:
+        if self.skipped_reason in {ROBOTS_DISALLOW_ALL, ROBOTS_DISALLOW_URL, "robots_unavailable", "http_403"} or "http_403" in err_set:
             return "blocked"
         if "cookie_consent" in err_set:
             return "consent_gate"
@@ -122,6 +122,15 @@ def crawl_domain(
     crawl_ts: str,
     tag_rules: Dict[str, List[str]] | None = None,
 ) -> Tuple[List[JobPosting], CrawlStats]:
+    def _normalize_robots_rule(rule: str | None) -> str | None:
+        if not rule:
+            return None
+        if rule == "Disallow: /":
+            return ROBOTS_DISALLOW_ALL
+        if rule == "blocked_by_robots":
+            return ROBOTS_DISALLOW_URL
+        return rule
+
     stats = CrawlStats(domain=domain)
     robots_checker = RobotsChecker()
 
@@ -129,7 +138,8 @@ def crawl_domain(
     base_url = f"https://{domain}"
     allowed, rule = robots_checker.can_fetch_detail(base_url)
     if not allowed:
-        stats.skipped_reason = ROBOTS_DISALLOW_ALL if rule == "Disallow: /" else ROBOTS_DISALLOW_URL
+        normalized = _normalize_robots_rule(rule) or ROBOTS_DISALLOW_URL
+        stats.skipped_reason = normalized
         stats.robots_rule_hit = rule
         stats.first_blocked_url = base_url
         return [], stats
@@ -185,11 +195,12 @@ def crawl_domain(
             break
         allowed, rule = robots_checker.can_fetch_detail(seed)
         if not allowed:
-            stats.errors.append(ROBOTS_DISALLOW_URL)
+            normalized = _normalize_robots_rule(rule) or ROBOTS_DISALLOW_URL
+            stats.errors.append(normalized)
             if not stats.first_blocked_url:
                 stats.first_blocked_url = seed
                 stats.robots_rule_hit = rule
-                stats.skipped_reason = stats.skipped_reason or ROBOTS_DISALLOW_URL
+                stats.skipped_reason = stats.skipped_reason or normalized
             continue
         res, reason = fetch_url(
             session,

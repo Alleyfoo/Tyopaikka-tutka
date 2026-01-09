@@ -1,45 +1,65 @@
-# Work place scanner from YTJ data
+# Hiring signal scanner (Places -> domains -> Ollama)
 
-Browse first, crawl optional. Työkalu shortlistaukseen, karttaan ja analytiikkaan PRH/YTJ-datasta; jobs-crawl on lisäbonus, ei oletus.
+This repo focuses on finding hiring signals from company websites near a station.
+We start from Google Places CSV exports, build a master list, map domains, and
+run a lightweight Ollama scan that checks a couple of pages per company.
 
-## 3-step happy path
-1) **Browse & curate (ei verkkoa)**
-   - Aja run, avaa editori: `streamlit run streamlit_app.py` (auto-resolvoi `out/`-artefaktit tai anna polut).
-   - Käytä presettejä/filttereitä, lisää note/tagit, shortlist/exclude/hide. Dry-run → Commit (backup + audit) → Undo Audit-tabista tarvittaessa.
-2) **Act**
-   - Export outreach.xlsx nykyisestä filtterinäkymästä (Outreach + Meta sheet: polut, päivämäärät, filtterit).
-3) **Publish**
-   - Jaettava kartta/watch: `python -m apprscan map` ja `python -m apprscan watch` (automaattisesti uusimmat artefaktit, tai anna polut).
+## Recap
+We simplified a complex data-cleaning pipeline by using local agents to classify hiring signals,
+and delivered a working scan in a short turnaround from the git baseline.
 
-Optional (raskas): jobs-crawl, jos haluat tuoreet job-signaalit.
+## Current flow (Lahti example)
+1) Build a master from Places CSVs
+   - `python scripts/places_to_master.py --station "Lahti,60.9836,25.6577,out/places_lahti.csv" --out out/master_places.xlsx`
+2) Optional: curate in Streamlit (hide housing-like names, add tags)
+   - `streamlit run streamlit_app.py`
+3) Build domains from Places websites
+   - `python -m apprscan domains --companies out/master_places.xlsx --out domains.csv`
+4) Ollama hiring-signal scan (1 km radius, 10-50 companies)
+   - `python -m apprscan scan --station Lahti --max-distance-km 1.0 --limit 50 --out out/hiring_signal_lahti_50.csv`
 
-## Artefaktit
-- `out/master_YYYYMMDD.xlsx` (Shortlist, industry, score, etäisyydet)
-- `out/run_YYYYMMDD/jobs/diff.xlsx` (uudet jobit)
-- `out/run_YYYYMMDD/jobs/jobs.xlsx` (kaikki jobit)
+## Quality gate
+- Run the one-button check before shipping or sharing outputs:
+  - `python -m apprscan check`
 
-## Asennus
+## What the Ollama scan does
+- Filters companies by nearest station and distance.
+- Picks 1-2 candidate URLs (homepage + careers hint if found).
+- Fetches those pages and uses heuristics with LLM fallback to classify: `yes`, `no`, or `unclear`.
+- Writes a CSV with signals, confidence, evidence, and any HTTP errors.
+
+## Outputs
+- `out/master_places.xlsx` (Shortlist + Excluded)
+- `domains.csv` (business_id, name, domain)
+- `out/hiring_signal_lahti.csv` / `out/hiring_signal_lahti_50.csv`
+- Output schema: `schemas/hiring_signal_output.schema.json`
+
+## Results (latest run)
+- Lahti, 1 km radius, 50 companies: yes=9, no=14, unclear=27
+- Output file: `out/hiring_signal_lahti_50.csv`
+
+## Evaluation harness
+- Run heuristic checks against stored HTML fixtures:
+  - `python -m apprscan.evaluate_hiring_signal`
+
+## Requirements
+- Python environment (see install below)
+- Local Ollama running
+- Configure Ollama via environment variables or repo `.env` (see `.env.example`)
+
+## Install
 ```
-python -m venv .venv && .\.venv\Scripts\activate   # tai source .venv/bin/activate
-pip install -e .[dev]   # tai pip install -r requirements-dev.txt
+python -m venv .venv && .\.venv\Scripts\activate
+pip install -e .[dev]
 ```
 
-## Nopeasti alkuun
-- Apu: `python -m apprscan --help`
-- Kartta: `python -m apprscan map`
-- Watch: `python -m apprscan watch`
-- Run (esim.): `python -m apprscan run --cities "Helsinki,Espoo,Vantaa,Kerava,Mäntsälä,Lahti" --radius-km 1.0 --max-pages 3 --include-excluded --out out/run_YYYYMMDD --master-xlsx out/master_YYYYMMDD.xlsx`
-- Jobs-crawl (valinnainen): `python -m apprscan jobs --companies out/run_YYYYMMDD/companies.xlsx --domains domains.csv --suggested domains_suggested.csv --out out/run_YYYYMMDD/jobs --max-domains 20 --max-pages-per-domain 5`
+## Optional (heavy): full jobs crawl
+If you want actual job listings, the jobs crawler is still available, but it is slower.
+```
+python -m apprscan jobs --companies out/master_places.xlsx --domains domains.csv --out out/jobs_places --max-domains 50 --max-pages-per-domain 5
+```
 
-## Konfiguraatio
-- Industry-ryhmät: `config/industry_groups.yaml` (pisin prefix voittaa).
-- Profiilit: `config/profiles.yaml` (valitse yksi ja käytä `--profile`).
-- Geokoodaus cache: `--geocode-cache` (oletus `data/geocode_cache.sqlite`, .gitignore:ssa).
-- Asemadata: `data/stations_fi.csv` tai oma `--stations-file`.
-
-## Kehitys ja testit
-- Lint: `ruff check .` (format: `ruff format .`)
-- Testit: `python -m pytest`
-- Tavoite: `python -m apprscan --help` toimii ja testit ajettavissa.
-
-Lisäohje: katso myös `docs/WORKFLOW.md` (kenttäopas, <2 min lukuaika).
+## Config and docs
+- Industry groups: `config/industry_groups.yaml`
+- Profiles: `config/profiles.yaml`
+- Workflow notes: `docs/WORKFLOW.md`

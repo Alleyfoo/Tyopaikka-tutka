@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "apprenticeship-employer-scanner"
-version = "0.1.0"
-description = "CLI-työkalu oppisopimuskelpoisten työnantajien shortlistaukseen (PRH/YTJ + geokoodaus)."
+version = "0.6.0"
+description = "Local hiring signal scanner (Places -> domains -> Ollama)."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Oppisopimushaku" }]

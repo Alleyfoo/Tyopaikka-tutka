@@ -28,3 +28,27 @@ def test_domains_command_filters_housing(tmp_path):
     out_df = pd.read_csv(args.out)
     assert len(out_df) == 1
     assert str(out_df.iloc[0]["business_id"]) == "456"
+
+
+def test_domains_command_extracts_domain_from_website(tmp_path):
+    companies_path = tmp_path / "companies.xlsx"
+    data = pd.DataFrame(
+        {
+            "business_id": ["123"],
+            "name": ["Test Oy"],
+            "website.url": ["https://www.example.com/careers"],
+        }
+    )
+    data.to_excel(companies_path, index=False)
+
+    args = SimpleNamespace(
+        companies=str(companies_path),
+        out=str(tmp_path / "domains.csv"),
+        only_shortlist=False,
+        suggest=False,
+        max_companies=10,
+    )
+    domains_command(args)
+
+    out_df = pd.read_csv(args.out)
+    assert out_df.iloc[0]["domain"] == "www.example.com"

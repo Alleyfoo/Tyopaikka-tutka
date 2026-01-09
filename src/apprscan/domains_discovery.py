@@ -77,14 +77,27 @@ def _fetch(url: str, timeout: float = 10.0) -> Optional[str]:
         return None
 
 
-def _contains_job_signal(html: str) -> bool:
+def contains_job_signal(html: str) -> bool:
     if not html:
         return False
     soup = BeautifulSoup(html, "html.parser")
     text = soup.get_text(" ", strip=True).lower()
     if "jobposting" in html.lower():
         return True
-    return any(h in text for h in ["open positions", "työpaikat", "avoin tehtävä", "open roles", "apply", "hae tähän"])
+    return any(
+        h in text
+        for h in [
+            "open positions",
+            "open roles",
+            "apply",
+            "tyopaikat",
+            "avoin tehtava",
+            "hae tahan",
+            "tyApaikat",
+            "avoin tehtAvA",
+            "hae tAhAn",
+        ]
+    )
 
 
 def _find_links(html: str, base_url: str) -> List[str]:
@@ -133,7 +146,7 @@ def suggest_for_company(business_id: str, name: str, domain: str) -> Optional[Do
     for path in COMMON_PATHS:
         url = f"{base}{path}"
         page = _fetch(url)
-        if page and _contains_job_signal(page):
+        if page and contains_job_signal(page):
             return DomainSuggestion(
                 business_id=business_id,
                 name=name,
@@ -147,7 +160,7 @@ def suggest_for_company(business_id: str, name: str, domain: str) -> Optional[Do
     # links from homepage
     for link in links:
         page = _fetch(link)
-        if page and _contains_job_signal(page):
+        if page and contains_job_signal(page):
             return DomainSuggestion(
                 business_id=business_id,
                 name=name,

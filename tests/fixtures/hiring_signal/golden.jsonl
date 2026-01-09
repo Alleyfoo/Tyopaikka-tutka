@@ -1,0 +1,4 @@
+{"id":"g1","url":"https://example.com/careers","text":"Open positions: apply now.","label":"yes"}
+{"id":"g2","url":"https://example.com/about","text":"We are a local company offering services.","label":"no"}
+{"id":"g3","url":"https://boards.greenhouse.io/acme","text":"Careers portal for Acme.","label":"yes"}
+{"id":"g4","url":"https://example.com/news","text":"Latest updates and press releases.","label":"no"}

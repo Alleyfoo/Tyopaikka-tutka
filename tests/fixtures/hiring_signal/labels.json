@@ -1,0 +1,8 @@
+[
+  {"file": "yes_careers.html", "label": "yes"},
+  {"file": "yes_jobposting.html", "label": "yes"},
+  {"file": "yes_ats.html", "label": "yes"},
+  {"file": "yes_finnish.html", "label": "yes"},
+  {"file": "no_about.html", "label": "no"},
+  {"file": "unclear_generic.html", "label": "unclear"}
+]

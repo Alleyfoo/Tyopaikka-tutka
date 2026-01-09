@@ -33,6 +33,7 @@ def fetch_url(
     timeout: float = 20.0,
     user_agent: str = "apprscan-jobs/0.1",
     max_retries: int = 3,
+    max_bytes: int = 2_000_000,
     rate_limit_state: Optional[Dict[str, float]] = None,
     req_per_second_per_domain: float = 1.0,
     debug_html_dir: Optional[Path] = None,
@@ -74,6 +75,9 @@ def fetch_url(
         if resp.status_code >= 400:
             return None, f"http_{resp.status_code}"
 
+        content = resp.content
+        if max_bytes and len(content) > max_bytes:
+            return None, "response_too_large"
         html = resp.text
         if debug_html_dir:
             debug_html_dir.mkdir(parents=True, exist_ok=True)

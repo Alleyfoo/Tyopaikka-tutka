@@ -20,7 +20,8 @@ class RobotsChecker:
             parser.read()
         except Exception:
             parser = RobotFileParser()
-            parser.parse([])  # allow all (fail-open) but mark unavailable via flag if needed
+            parser.parse(["User-agent: *", "Disallow: /"])
+            setattr(parser, "apprscan_error", "robots_unavailable")
         return parser
 
     def get_parser(self, domain: str) -> RobotFileParser:
@@ -36,6 +37,8 @@ class RobotsChecker:
     def can_fetch_detail(self, url: str) -> tuple[bool, str | None]:
         parsed = urlparse(url)
         parser = self.get_parser(parsed.netloc)
+        if getattr(parser, "apprscan_error", None) == "robots_unavailable":
+            return False, "robots_unavailable"
         disallow_all = getattr(parser, "disallow_all", False)
         if disallow_all:
             return False, "Disallow: /"

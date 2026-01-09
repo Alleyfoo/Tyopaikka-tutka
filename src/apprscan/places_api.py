@@ -10,6 +10,7 @@ import requests
 
 API_URL = "https://places.googleapis.com/v1/places:searchText"
 NEARBY_URL = "https://places.googleapis.com/v1/places:searchNearby"
+DETAILS_URL = "https://places.googleapis.com/v1/places/"
 DEFAULT_FIELD_MASK = (
     "places.id,"
     "places.displayName,"
@@ -19,6 +20,7 @@ DEFAULT_FIELD_MASK = (
     "places.websiteUri,"
     "places.businessStatus"
 )
+DEFAULT_DETAILS_FIELD_MASK = "id,displayName,formattedAddress,websiteUri,businessStatus"
 
 
 def get_api_key(env_var: str = "GOOGLE_MAPS_API_KEY") -> str:
@@ -34,6 +36,33 @@ def _field_mask(field_mask: str | Iterable[str] | None) -> str:
     if isinstance(field_mask, str):
         return field_mask
     return ",".join(field_mask)
+
+
+def fetch_place_details(
+    place_id: str,
+    *,
+    api_key: str | None = None,
+    field_mask: str | Iterable[str] | None = None,
+) -> dict[str, Any]:
+    """Fetch place details for a place_id using Places API (New)."""
+    key = api_key or get_api_key()
+    headers = {
+        "X-Goog-Api-Key": key,
+        "X-Goog-FieldMask": _field_mask(field_mask or DEFAULT_DETAILS_FIELD_MASK),
+    }
+    url = f"{DETAILS_URL}{place_id}"
+    resp = requests.get(url, headers=headers, timeout=20)
+    if resp.status_code != 200:
+        raise RuntimeError(f"Places API HTTP {resp.status_code}: {resp.text}")
+    data = resp.json()
+    display = data.get("displayName") or {}
+    return {
+        "place_id": data.get("id") or place_id,
+        "name": display.get("text") or "",
+        "formatted_address": data.get("formattedAddress") or "",
+        "website": data.get("websiteUri") or "",
+        "business_status": data.get("businessStatus") or "",
+    }
 
 
 def search_text(

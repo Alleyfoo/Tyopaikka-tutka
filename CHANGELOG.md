@@ -5,6 +5,13 @@
 - Inspector: next/prev navigation and "opened from jobs" badge.
 - Focus mode: one-company view with banner + sidebar clear button.
 - Sidebar status line shows focus + view context + pending count.
+- Hiring scan: `apprscan scan` CLI for Ollama-based hiring signal checks.
+- Portability: repo-local `.env` support and `.env.example`.
+- Scan outputs now include run provenance (run_id, git_sha, tool_version, crawl_ts).
+- Robots handling now fails closed when robots.txt is unavailable.
+- Added heuristic evaluation harness for hiring-signal fixtures.
+- Added output contract schema + validation tests for hiring-signal outputs.
+- CI now runs the fixture evaluator and version consistency check.
 
 ## v0.5.0
 - Streamlit editor: presets, safe commit/undo, outreach export with meta sheet.

@@ -1,28 +1,36 @@
-# Workflow (kenttäopas, 1 sivu)
+# Workflow (quick guide)
 
-## 0) Perusajatus
-Browse → Curate → Act → Publish. Crawlia tarvitaan vain, kun haluat tuoreet job-signaalit.
+## Overview
+Places CSV -> master list -> domain map -> Ollama hiring signal scan.
+The goal is to identify companies near a station that show recruiting signals
+on their websites without running a full crawl.
 
-## A) Browse & curate (ei verkkoa)
-- Avaa editori: `streamlit run streamlit_app.py` (käyttää automaattisesti `out/`-hakemiston uusimpia master/diff/curation-artefakteja, tai anna polut käsin).
-- Käytä presettejä ja filttereitä, lisää note/tagit, shortlist/exclude/hide.
-- Dry-run summary näyttää muutokset; Commit kirjoittaa overlayn backupilla. Undo löytyy Audit-tabista.
+## A) Build the master list
+- Generate master from Places CSV exports:
+  - `python scripts/places_to_master.py --station "Lahti,60.9836,25.6577,out/places_lahti.csv" --out out/master_places.xlsx`
 
-## B) Act (export)
-- Nappi “Export outreach.xlsx” vie nykyisen filtterinäkymän (Outreach + Meta sheet: polut, päivämäärät, filtterit).
+## B) Optional: curate
+- Open Streamlit editor to hide housing-like names and add notes/tags:
+  - `streamlit run streamlit_app.py`
 
-## C) Publish (map/watch)
-- Tarvitset jaettavan näkymän? Aja:
-  - `python -m apprscan map` → HTML-kartta (käyttää uusimpia artefakteja automaattisesti).
-  - `python -m apprscan watch` → teksti-/raporttinäkymä (jos käytössä).
+## C) Build domains
+- Extract website domains from Places data:
+  - `python -m apprscan domains --companies out/master_places.xlsx --out domains.csv`
 
-## D) Optional: refresh data (crawl)
-- Kun haluat päivittää lähdedatan:
-  - `python -m apprscan run --cities "Helsinki,Espoo,Vantaa,Kerava,Mäntsälä,Lahti" --radius-km 1.0 --max-pages 3 --include-excluded --out out/run_YYYYMMDD --master-xlsx out/master_YYYYMMDD.xlsx`
-  - (valinnainen) jobs-crawl: `python -m apprscan jobs --companies out/run_YYYYMMDD/companies.xlsx --domains domains.csv --suggested domains_suggested.csv --out out/run_YYYYMMDD/jobs --max-domains 20 --max-pages-per-domain 5`
-  - Päivitä master + raportit: `python -m apprscan run ... --activity-file out/run_YYYYMMDD/jobs/company_activity.xlsx --master-xlsx out/master_YYYYMMDD.xlsx --out out/run_YYYYMMDD`
+## D) Hiring signal scan (Ollama)
+- Scan companies near a station (example: Lahti, 1 km, 50 companies):
+  - `python -m apprscan scan --station Lahti --max-distance-km 1.0 --limit 50 --out out/hiring_signal_lahti_50.csv`
 
-## Troubleshooting
-- Master/diff mismatch: anna polut eksplisiittisesti tai käytä samaa run-id:tä.
-- Commit blocked: masterin `business_id` puuttuu/ei ole uniikki → korjaa masterin lähteessä ja aja run uudelleen.
-- Kartta ei vastaa editoria: varmista että käytät viimeisintä masteria ja ettei preview pending -tila ole päällä.
+## Outputs
+- `out/master_places.xlsx` (Shortlist + Excluded)
+- `domains.csv` (business_id, name, domain)
+- `out/hiring_signal_lahti.csv` / `out/hiring_signal_lahti_50.csv`
+
+## Quality gate
+- Run `python -m apprscan check` to validate tests, fixtures, schema, and Ollama sanity.
+
+## Notes
+- The scan checks 1-2 URLs per company (homepage + careers hint if found).
+- Results are `yes`, `no`, or `unclear` with confidence and evidence text.
+- Configure Ollama via environment variables or repo `.env` (see `.env.example`).
+- Full jobs crawl is still possible but slower.

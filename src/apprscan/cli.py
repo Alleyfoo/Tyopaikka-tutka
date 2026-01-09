@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 from typing import Sequence
+from urllib.parse import urlparse
 
 import pandas as pd
 
@@ -89,6 +90,52 @@ def add_map_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentP
     return p
 
 
+def add_scan_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
+    p = subparsers.add_parser(
+        "scan",
+        help="LLM-assisted hiring signal scan (Ollama).",
+        description="Scan company websites for hiring signals using local Ollama.",
+    )
+    p.add_argument("--master", type=str, default="out/master_places.xlsx", help="Master file (xlsx/csv/parquet).")
+    p.add_argument("--sheet", type=str, default="Shortlist", help="Sheet name when using xlsx.")
+    p.add_argument("--domains", type=str, default="domains.csv", help="Domain mapping CSV.")
+    p.add_argument("--station", type=str, default="Lahti", help="Nearest station filter.")
+    p.add_argument("--max-distance-km", type=float, default=1.0, help="Distance threshold in km.")
+    p.add_argument("--limit", type=int, default=10, help="Max companies to process.")
+    p.add_argument("--max-urls", type=int, default=2, help="Max URLs to check per company.")
+    p.add_argument("--sleep-s", type=float, default=1.0, help="Sleep between HTTP fetches.")
+    p.add_argument("--out", type=str, default="out/hiring_signal_lahti.csv", help="Output file.")
+    p.add_argument("--format", type=str, default="csv", choices=["csv", "jsonl"], help="Output format.")
+    p.add_argument(
+        "--robots-mode",
+        type=str,
+        default="strict",
+        choices=["strict", "allowlist", "off"],
+        help="Robots handling (strict/allowlist/off).",
+    )
+    p.add_argument("--robots-allowlist", type=str, default="", help="Optional allowlist file for robots override.")
+    p.add_argument("--env-file", type=str, default="", help="Optional .env path (defaults to repo .env).")
+    p.add_argument("--ollama-host", type=str, default="", help="Ollama host (override).")
+    p.add_argument("--ollama-model", type=str, default="", help="Ollama model (override).")
+    p.add_argument("--ollama-options", type=str, default="", help="JSON options for Ollama (override).")
+    p.add_argument("--no-llm", action="store_true", help="Skip LLM and use heuristics only.")
+    p.add_argument("--deterministic", action="store_true", help="Set deterministic LLM options (temp=0).")
+    p.add_argument("--run-id", type=str, default="", help="Optional run identifier for outputs.")
+    p.set_defaults(func=scan_command)
+    return p
+
+
+def add_check_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
+    p = subparsers.add_parser(
+        "check",
+        help="Run repo health checks (tests, fixtures, schema, env).",
+        description="Gate command to validate tests, fixtures, schema, and Ollama sanity.",
+    )
+    p.add_argument("--env-file", type=str, default="", help="Optional .env path (defaults to repo .env).")
+    p.set_defaults(func=check_command)
+    return p
+
+
 def _load_domain_map(path: Path | None) -> dict[str, str]:
     if path is None or not path.exists():
         return {}
@@ -104,10 +151,29 @@ def _load_domain_map(path: Path | None) -> dict[str, str]:
     return dom_map
 
 
+def _clean_domain(val: object) -> str:
+    raw = str(val or "").strip()
+    if not raw or raw.lower() in {"nan", "none", "null"}:
+        return ""
+    parsed = urlparse(raw if "://" in raw else f"https://{raw}")
+    host = parsed.netloc or parsed.path
+    host = host.split("/")[0].strip()
+    return host
+
+
+def _extract_domain_from_row(row: pd.Series) -> str:
+    for key in ("domain", "company_domain", "website.url", "website"):
+        if key in row and row.get(key):
+            domain = _clean_domain(row.get(key))
+            if domain:
+                return domain
+    return ""
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="apprscan",
-        description="Apprenticeship employer scanner (PRH/YTJ + geokoodaus + raportointi).",
+        description="Local hiring signal scanner (Places -> domains -> Ollama), with optional PRH/jobs tooling.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
 
@@ -181,6 +247,8 @@ def build_parser() -> argparse.ArgumentParser:
     domains_parser.set_defaults(func=domains_command)
 
     add_watch_parser(subparsers)
+    add_scan_parser(subparsers)
+    add_check_parser(subparsers)
 
     analytics_parser = subparsers.add_parser(
         "analytics",
@@ -199,8 +267,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_parser = subparsers.add_parser(
         "run",
-        help="Suorita haku ja raportointi.",
-        description=("Hakee PRH/YTJ:sta yrityksia, geokoodaa osoitteet ja tuottaa raportit (Excel/GeoJSON/HTML)."),
+        help="Legacy PRH/YTJ run (optional).",
+        description=(
+            "Legacy: fetch PRH/YTJ companies, geocode addresses, and produce reports (Excel/GeoJSON/HTML)."
+        ),
     )
     run_parser.add_argument(
         "--cities",
@@ -342,8 +412,12 @@ def domains_command(args: argparse.Namespace) -> int:
         print(f"Companies file not found: {companies_path}")
         return 1
     if companies_path.suffix.lower() in [".xlsx", ".xls"]:
-        sheet = "Shortlist" if args.only_shortlist else 0
-        df = pd.read_excel(companies_path, sheet_name=sheet)
+        only_shortlist = getattr(args, "only_shortlist", True)
+        sheet = "Shortlist" if only_shortlist else 0
+        try:
+            df = pd.read_excel(companies_path, sheet_name=sheet)
+        except ValueError:
+            df = pd.read_excel(companies_path, sheet_name=0)
     elif companies_path.suffix.lower() == ".csv":
         df = pd.read_csv(companies_path)
     elif companies_path.suffix.lower() == ".parquet":
@@ -351,6 +425,10 @@ def domains_command(args: argparse.Namespace) -> int:
     else:
         print("Unsupported companies file format (use xlsx/csv/parquet).")
         return 1
+    if "business_id" not in df.columns and "businessId" in df.columns:
+        df = df.rename(columns={"businessId": "business_id"})
+    if "name" not in df.columns and "company_name" in df.columns:
+        df = df.rename(columns={"company_name": "name"})
     if "name" not in df.columns:
         df["name"] = ""
     from .filters import is_housing_company
@@ -360,11 +438,34 @@ def domains_command(args: argparse.Namespace) -> int:
         name = str(row.get("name") or "")
         if is_housing_company(name):
             continue
-        filtered.append({"business_id": row.get("business_id"), "name": row.get("name"), "domain": ""})
+        domain = _extract_domain_from_row(row)
+        filtered.append({"business_id": row.get("business_id"), "name": row.get("name"), "domain": domain})
     out_path = Path(args.out)
     out_df = pd.DataFrame(filtered)
     out_df.to_csv(out_path, index=False)
     print(f"Domain template written: {out_path} ({len(out_df)} rows, housing names filtered out)")
+
+    if getattr(args, "suggest", False):
+        from .domains_discovery import suggest_domains
+
+        max_companies = int(getattr(args, "max_companies", 200) or 200)
+        suggestions_df = suggest_domains(out_df, max_companies=max_companies)
+        suggested_path = out_path.with_name("domains_suggested.csv")
+        suggestions_df.to_csv(suggested_path, index=False)
+        print(f"Domain suggestions written: {suggested_path} ({len(suggestions_df)} rows)")
+
+    if getattr(args, "validate", False):
+        from .domains_discovery import validate_domains
+
+        domains_path = Path(getattr(args, "domains", "") or out_path)
+        if domains_path.exists():
+            domains_df = pd.read_csv(domains_path)
+        else:
+            domains_df = out_df
+        validated_df = validate_domains(domains_df)
+        validated_path = out_path.with_name("domains_validated.csv")
+        validated_df.to_csv(validated_path, index=False)
+        print(f"Domain validation written: {validated_path} ({len(validated_df)} rows)")
 
     return 0
 
@@ -521,6 +622,22 @@ def watch_command(args: argparse.Namespace) -> int:
     print("Active filters:", "; ".join(ev.meta.get("active_filters", [])))
     print(f"Watch report written to {args.out}")
     return 0
+
+
+def scan_command(args: argparse.Namespace) -> int:
+    from .hiring_scan import build_config, run_scan
+
+    config = build_config(args)
+    return run_scan(config)
+
+
+def check_command(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from .checks import run_checks
+
+    env_file = Path(args.env_file) if args.env_file else None
+    return run_checks(env_file)
 
 
 def run_command(args: argparse.Namespace) -> int:

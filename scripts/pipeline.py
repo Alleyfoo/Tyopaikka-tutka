@@ -1,4 +1,4 @@
-"""Convenience pipeline runner: run -> jobs -> run with activity -> master -> watch."""
+"""Legacy PRH pipeline runner: run -> jobs -> run with activity -> master -> watch."""
 
 from __future__ import annotations
 

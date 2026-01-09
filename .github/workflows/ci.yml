@@ -20,5 +20,9 @@ jobs:
         run: ruff check .
       - name: Pytest
         run: python -m pytest -q
+      - name: Hiring signal fixtures
+        run: python -m apprscan.evaluate_hiring_signal
+      - name: Version consistency
+        run: python tools/check_version.py
       - name: CLI help smoke
         run: python -m apprscan --help
