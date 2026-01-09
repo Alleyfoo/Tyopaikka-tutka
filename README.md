@@ -26,6 +26,7 @@ and delivered a working scan in a short turnaround from the git baseline.
 - Filters companies by nearest station and distance.
 - Picks 1-2 candidate URLs (homepage + careers hint if found).
 - Fetches those pages and uses heuristics with LLM fallback to classify: `yes`, `no`, or `unclear`.
+- Requires 2-6 evidence snippets + URLs for `yes`/`no` or downgrades to `unclear`.
 - Writes a CSV with signals, confidence, evidence, and any HTTP errors.
 
 ## Outputs

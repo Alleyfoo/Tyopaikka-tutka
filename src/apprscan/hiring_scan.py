@@ -34,17 +34,29 @@ PROMPT_VERSION = hashlib.sha256(PROMPT_SYSTEM.encode("utf-8")).hexdigest()[:8]
 EVIDENCE_KEYWORDS = [
     "open positions",
     "open roles",
+    "openings",
     "apply",
     "job",
     "jobs",
     "career",
     "careers",
+    "hiring",
     "rekry",
     "rekrytointi",
     "ura",
     "tyopaikat",
     "avoin tehtava",
     "hae tahan",
+]
+NEGATIVE_KEYWORDS = [
+    "no open positions",
+    "no openings",
+    "no vacancies",
+    "no open roles",
+    "not hiring",
+    "not recruiting",
+    "ei avoimia",
+    "ei avoimia paikkoja",
 ]
 
 
@@ -164,12 +176,39 @@ def _ensure_evidence(result: Dict[str, Any]) -> Dict[str, Any]:
         snippets = []
     if not isinstance(urls, list):
         urls = []
+    snippets = [str(s).strip() for s in snippets if str(s).strip()]
+    urls = [str(u).strip() for u in urls if str(u).strip()]
+    if len(snippets) > 6:
+        snippets = snippets[:6]
     if len(snippets) < 2 or not urls:
         result["hiring_signal"] = "unclear"
         result["confidence"] = min(float(result.get("confidence") or 0.0), 0.2)
         result["evidence"] = "insufficient_evidence"
         result["evidence_snippets"] = []
         result["evidence_urls"] = []
+        return result
+
+    def _has_keyword(items: list[str], keywords: list[str]) -> bool:
+        return any(k in snippet.lower() for snippet in items for k in keywords)
+
+    if signal == "yes" and not _has_keyword(snippets, EVIDENCE_KEYWORDS):
+        result["hiring_signal"] = "unclear"
+        result["confidence"] = min(float(result.get("confidence") or 0.0), 0.2)
+        result["evidence"] = "generic_evidence"
+        result["evidence_snippets"] = []
+        result["evidence_urls"] = []
+        return result
+
+    if signal == "no" and not _has_keyword(snippets, NEGATIVE_KEYWORDS):
+        result["hiring_signal"] = "unclear"
+        result["confidence"] = min(float(result.get("confidence") or 0.0), 0.2)
+        result["evidence"] = "generic_evidence"
+        result["evidence_snippets"] = []
+        result["evidence_urls"] = []
+        return result
+
+    result["evidence_snippets"] = snippets
+    result["evidence_urls"] = urls
     return result
 
 
@@ -286,6 +325,7 @@ def _evaluate_page(
         "- yes: explicit hiring, careers, open positions, job listings, 'rekry', 'ura', 'tyopaikat'.\n"
         "- no: clearly not hiring and no recruiting content.\n"
         "- unclear: insufficient or ambiguous.\n"
+        "- evidence must include 2-6 snippets + URLs; otherwise return unclear.\n"
     )
     raw = _ollama_chat(host, model, system, user, options)
     return _parse_json(raw)

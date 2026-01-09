@@ -12,6 +12,7 @@
 - Added heuristic evaluation harness for hiring-signal fixtures.
 - Added output contract schema + validation tests for hiring-signal outputs.
 - CI now runs the fixture evaluator and version consistency check.
+- Hiring scan downgrades decisions without evidence snippets + URLs to "unclear".
 
 ## v0.5.0
 - Streamlit editor: presets, safe commit/undo, outreach export with meta sheet.
