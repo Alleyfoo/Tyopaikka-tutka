@@ -92,6 +92,10 @@ def validate_hiring_signal_rows(rows: Iterable[Mapping]) -> List[str]:
             parsed = _parse_list(row.get(col))
             if parsed is None:
                 errors.append(f"row {idx}: invalid list column {col}")
+        if "deterministic" in row and row.get("deterministic") is not None:
+            deterministic = _parse_bool(row.get("deterministic"))
+            if deterministic is None:
+                errors.append(f"row {idx}: invalid deterministic")
         llm_used = _parse_bool(row.get("llm_used"))
         if llm_used is None:
             errors.append(f"row {idx}: invalid llm_used")

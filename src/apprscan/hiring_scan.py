@@ -593,6 +593,7 @@ def run_scan(config: ScanConfig) -> int:
                 "ollama_model": config.ollama_model or "",
                 "ollama_temperature": config.ollama_temperature,
                 "prompt_version": config.prompt_version,
+                "deterministic": bool(config.deterministic),
                 "llm_used": bool(config.use_llm),
                 "output_format": config.output_format,
             }

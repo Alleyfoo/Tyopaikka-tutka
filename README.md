@@ -43,6 +43,10 @@ and delivered a working scan in a short turnaround from the git baseline.
 - Run heuristic checks against stored HTML fixtures:
   - `python -m apprscan.evaluate_hiring_signal`
 
+## Deterministic mode
+- Use `--deterministic` to set temperature to 0 for more reproducible LLM output.
+- Output provenance includes `ollama_model`, `ollama_temperature`, `prompt_version`, and `tool_version`.
+
 ## Requirements
 - Python environment (see install below)
 - Local Ollama running
@@ -64,3 +68,4 @@ python -m apprscan jobs --companies out/master_places.xlsx --domains domains.csv
 - Industry groups: `config/industry_groups.yaml`
 - Profiles: `config/profiles.yaml`
 - Workflow notes: `docs/WORKFLOW.md`
+- Output contract: `docs/OUTPUT_CONTRACT.md`

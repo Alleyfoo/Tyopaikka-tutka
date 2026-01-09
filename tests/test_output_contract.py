@@ -29,6 +29,7 @@ def test_hiring_signal_output_contract_valid_rows():
             "ollama_model": "llama3",
             "ollama_temperature": 0.2,
             "prompt_version": "deadbeef",
+            "deterministic": False,
             "llm_used": True,
             "output_format": "jsonl",
         },

@@ -51,6 +51,7 @@
     "ollama_model": {"type": "string"},
     "ollama_temperature": {"type": "number"},
     "prompt_version": {"type": "string"},
+    "deterministic": {"type": "boolean"},
     "llm_used": {"type": "boolean"},
     "output_format": {"type": "string", "enum": ["csv", "jsonl"]}
   }

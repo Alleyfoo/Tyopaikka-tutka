@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.6.0 (unreleased)
+## v0.6.0 (2026-01-09)
 - Jobs view: selected company dropdown + open in Inspector.
 - Inspector: next/prev navigation and "opened from jobs" badge.
 - Focus mode: one-company view with banner + sidebar clear button.
@@ -14,6 +14,11 @@
 - CI now runs the fixture evaluator and version consistency check.
 - Hiring scan downgrades decisions without evidence snippets + URLs to "unclear".
 - CI enforces minimum precision/recall and max-uncertain thresholds for the hiring fixtures.
+- Added `deterministic` flag to outputs and documented the output contract.
+
+Migration notes:
+- Hiring scan outputs include evidence arrays, provenance fields, and optional `deterministic`.
+- CSV stores evidence arrays as JSON strings; update downstream parsers accordingly.
 
 ## v0.5.0
 - Streamlit editor: presets, safe commit/undo, outreach export with meta sheet.
