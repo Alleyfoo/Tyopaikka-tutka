@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.7.2 (2026-01-09)
+- Add `company_package.md` as the primary human-readable dossier output.
+- Enforce evidence downgrade rules for `yes` hiring status without enough first-party/ATS URLs.
+- Split CI into core and server jobs.
+
 ## v0.7.1 (2026-01-09)
 - Stop tracking generated `domains.csv`; add `tests/fixtures/domains.sample.csv`.
 - Companion service: request size cap, per-token rate limits, and retention purge on startup.
