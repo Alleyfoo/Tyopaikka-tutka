@@ -186,7 +186,9 @@ def _build_evidence(snippets: list[str], urls: list[str]) -> list[dict[str, str]
     return evidence
 
 
-def _enforce_hiring_evidence(status: str, evidence_urls: list[str], domain: str) -> tuple[str, float, list[str]]:
+def _enforce_hiring_evidence(
+    status: str, evidence_urls: list[str], snippet_count: int, domain: str
+) -> tuple[str, float, list[str]]:
     if status != "yes":
         return status, 0.0, []
     eligible = []
@@ -196,7 +198,11 @@ def _enforce_hiring_evidence(status: str, evidence_urls: list[str], domain: str)
     unique_urls = sorted(set(eligible))
     if len(unique_urls) >= 2:
         return status, 0.0, []
+    if len(unique_urls) >= 1 and snippet_count >= 2:
+        return status, 0.0, []
     if len(unique_urls) == 1:
+        return "maybe", 0.5, ["insufficient_evidence_urls"]
+    if snippet_count >= 2:
         return "maybe", 0.5, ["insufficient_evidence_urls"]
     return "uncertain", 0.2, ["insufficient_evidence_urls"]
 
@@ -317,7 +323,9 @@ def build_company_package(
     signals = []
     if scan_result.get("evidence"):
         signals.append(str(scan_result.get("evidence")))
-    downgrade_status, confidence_cap, downgrade_reasons = _enforce_hiring_evidence(status, urls, domain)
+    downgrade_status, confidence_cap, downgrade_reasons = _enforce_hiring_evidence(
+        status, urls, len(snippets), domain
+    )
     if downgrade_status != status:
         status = downgrade_status
         signals.extend(downgrade_reasons)

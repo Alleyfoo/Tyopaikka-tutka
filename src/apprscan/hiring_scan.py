@@ -350,15 +350,18 @@ def _ensure_evidence(result: Dict[str, Any]) -> Dict[str, Any]:
 
 def _build_candidates(domain: str, website_url: str | None) -> list[str]:
     candidates: list[str] = []
+    base = f"https://{domain}"
     if website_url:
         url = str(website_url).strip()
         if url and "://" not in url:
             url = f"https://{url}"
         if url:
             candidates.append(url)
-    base = f"https://{domain}"
+    # Prioritize at least one careers-like path early.
+    if COMMON_PATHS:
+        candidates.append(f"{base}{COMMON_PATHS[0]}")
     candidates.append(base)
-    for path in COMMON_PATHS:
+    for path in COMMON_PATHS[1:]:
         candidates.append(f"{base}{path}")
     seen = set()
     ordered = []
