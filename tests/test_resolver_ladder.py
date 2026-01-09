@@ -1,5 +1,6 @@
-import types
+from datetime import datetime, timezone
 
+from apprscan import __version__
 from apprscan.server import service
 
 
@@ -41,12 +42,18 @@ def test_places_resolver_ok(monkeypatch):
             }
         ),
     )
+    start = datetime.now(timezone.utc)
     result = service.process_maps_ingest(maps_url="https://www.google.com/maps")
     assert result["status"] == "ok"
     package = captured["package"]
     assert package["status"] == "ok"
+    assert package["degraded_reason"] == "none"
     assert package["source"]["website_source"] == "places"
     assert package["hiring"]["status"] == "yes"
+    assert package["tool_version"] == __version__
+    assert package["git_sha"] == "" or len(package["git_sha"]) >= 7
+    created = datetime.fromisoformat(package["created_at"].replace("Z", "+00:00"))
+    assert abs((created - start).total_seconds()) < 60
 
 
 def test_missing_website_degraded(monkeypatch):
@@ -57,6 +64,7 @@ def test_missing_website_degraded(monkeypatch):
     assert result["status"] == "degraded"
     package = captured["package"]
     assert package["status"] == "degraded"
+    assert package["degraded_reason"] == "website_missing"
     assert package["hiring"]["status"] == "uncertain"
     assert "Paste official website URL" in package.get("next_action", "")
 
@@ -67,4 +75,5 @@ def test_invalid_maps_url_error(monkeypatch):
     assert result["status"] == "error"
     package = captured["package"]
     assert package["status"] == "error"
+    assert package["degraded_reason"] == "none"
     assert "invalid_maps_url" in package.get("error", {}).get("code", "")

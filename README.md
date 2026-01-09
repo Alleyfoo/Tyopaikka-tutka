@@ -64,6 +64,10 @@ and delivered a working scan in a short turnaround from the git baseline.
   - `GET /result/{run_id}`
 - Company package schema: `src/apprscan/schemas/company_package.schema.json`
 - Output files per run: `out/runs/<run_id>/company_package.json` and `company_package.md`
+- Status mapping:
+  - `ok`: website resolved, scan completed.
+  - `degraded`: expected limitation (missing website, cookie wall, robots/JS-only).
+  - `error`: invalid request or upstream failure.
 
 ## Requirements
 - Python environment (see install below)

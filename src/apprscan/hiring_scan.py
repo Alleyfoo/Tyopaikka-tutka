@@ -181,14 +181,13 @@ def _extract_snippets(text: str, keywords: list[str], max_snippets: int = 4, win
     return snippets
 
 
-def _is_cookie_wall(title: str, text: str) -> bool:
+def _cookie_wall_signals(title: str, text: str) -> tuple[bool, int, float, list[str]]:
     combined = f"{title} {text}".lower()
-    hits = sum(1 for key in COOKIE_WALL_KEYWORDS if key in combined)
-    if hits >= 3 and len(text) < 2000:
-        return True
-    if hits >= 5:
-        return True
-    return False
+    matches = [key for key in COOKIE_WALL_KEYWORDS if key in combined]
+    hits = len(matches)
+    score = min(1.0, hits / 5.0) if hits else 0.0
+    is_wall = (hits >= 2 and len(text) < 2000) or hits >= 5
+    return is_wall, hits, score, matches
 
 
 def _load_allowlist(path: Path | None) -> set[str]:
@@ -268,8 +267,10 @@ def scan_domain(
         pages_fetched += 1
         checked_urls.append(res.final_url)
         title, text = _extract_text(res.html)
-        if _is_cookie_wall(title, text):
-            errors.append(f"{res.final_url}:cookie_wall")
+        is_wall, hits, score, matches = _cookie_wall_signals(title, text)
+        if is_wall:
+            matched = ",".join(matches[:5])
+            errors.append(f"{res.final_url}:cookie_wall:{hits}:{score:.2f}:{matched}")
             continue
         heuristic = evaluate_html(res.html, res.final_url)
         if heuristic["signal"] == "yes":

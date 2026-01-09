@@ -16,6 +16,7 @@ from apprscan.server import service
 def _minimal_package(run_id: str) -> dict:
     return {
         "status": "ok",
+        "degraded_reason": "none",
         "schema_version": "0.1",
         "run_id": run_id,
         "created_at": "2026-01-01T00:00:00Z",

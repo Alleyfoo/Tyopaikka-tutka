@@ -1,0 +1,48 @@
+{
+  "status": "degraded",
+  "degraded_reason": "cookie_wall",
+  "schema_version": "0.1",
+  "run_id": "fixture_cookie_wall",
+  "created_at": "2026-01-01T00:00:00Z",
+  "tool_version": "0.7.2",
+  "git_sha": "abcdef0",
+  "source": {
+    "source_ref": "https://www.google.com/maps",
+    "place_id": "place_456",
+    "canonical_domain": "example.com",
+    "website_source": "places",
+    "resolver_notes": "Resolved via Places websiteUri."
+  },
+  "hiring": {
+    "status": "uncertain",
+    "confidence": 0.0,
+    "signals": [],
+    "evidence": []
+  },
+  "industry": { "labels": [], "confidence": 0.0, "evidence": [] },
+  "roles": {
+    "detected": [],
+    "fit": { "score": 0, "green_flags": [], "red_flags": [], "evidence": [] }
+  },
+  "links": {
+    "maps_url": "https://www.google.com/maps",
+    "website_url": "https://example.com",
+    "careers_urls": [],
+    "ats_urls": [],
+    "contact_url": ""
+  },
+  "next_action": "Cookie wall detected. Open site manually and retry.",
+  "safety": {
+    "robots_respected": "unknown",
+    "pages_fetched": 1,
+    "skipped_reasons": [],
+    "errors": ["https://example.com:cookie_wall:3:0.60:cookie,consent,gdpr"],
+    "checked_urls": ["https://example.com"],
+    "llm_used": false,
+    "prompt_version": "",
+    "ollama_model": "",
+    "ollama_temperature": 0.0,
+    "deterministic": false
+  },
+  "notes": { "note": "", "tags": [] }
+}

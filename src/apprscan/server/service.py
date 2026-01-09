@@ -238,6 +238,12 @@ def render_company_markdown(package: dict[str, Any]) -> str:
     status = hiring.get("status") or "uncertain"
     confidence = hiring.get("confidence") or 0.0
     lines.append(f"**Decision:** {str(status).upper()} (confidence {confidence:.2f})")
+    pipeline_status = package.get("status") or "ok"
+    degraded_reason = package.get("degraded_reason") or ""
+    if pipeline_status != "ok":
+        lines.append(f"Pipeline status: {pipeline_status}")
+    if degraded_reason and degraded_reason != "none":
+        lines.append(f"Degraded reason: {degraded_reason}")
     lines.append("")
 
     signals = hiring.get("signals") or []
@@ -324,6 +330,7 @@ def build_company_package(
     note: str,
     tags: list[str],
     pipeline_status: str = "ok",
+    degraded_reason: str = "none",
     next_action: str = "",
 ) -> dict[str, Any]:
     signal = str(scan_result.get("signal") or scan_result.get("hiring_signal") or "unclear").lower()
@@ -342,6 +349,7 @@ def build_company_package(
 
     package = {
         "status": pipeline_status,
+        "degraded_reason": degraded_reason,
         "schema_version": SCHEMA_VERSION,
         "run_id": run_id,
         "created_at": _now_iso(),
@@ -429,6 +437,7 @@ def process_maps_ingest(
     if not _maps_host_allowed(maps_url):
         package = {
             "status": "error",
+            "degraded_reason": "none",
             "schema_version": SCHEMA_VERSION,
             "run_id": run_id,
             "created_at": _now_iso(),
@@ -469,6 +478,7 @@ def process_maps_ingest(
         next_action = "Paste official website URL to proceed."
         package = {
             "status": "degraded",
+            "degraded_reason": "place_id_not_found",
             "schema_version": SCHEMA_VERSION,
             "run_id": run_id,
             "created_at": _now_iso(),
@@ -509,6 +519,7 @@ def process_maps_ingest(
     except Exception as exc:
         package = {
             "status": "error",
+            "degraded_reason": "none",
             "schema_version": SCHEMA_VERSION,
             "run_id": run_id,
             "created_at": _now_iso(),
@@ -548,6 +559,7 @@ def process_maps_ingest(
         next_action = "Paste official website URL to proceed."
         package = {
             "status": "degraded",
+            "degraded_reason": "website_missing",
             "schema_version": SCHEMA_VERSION,
             "run_id": run_id,
             "created_at": _now_iso(),
@@ -600,6 +612,15 @@ def process_maps_ingest(
         ollama_options=scan_config.ollama_options,
         use_llm=scan_config.use_llm,
     )
+    pipeline_status = "ok"
+    degraded_reason = "none"
+    next_action = ""
+    cookie_hits = [err for err in scan_outcome.errors if "cookie_wall" in err]
+    if cookie_hits and not scan_outcome.results_found:
+        pipeline_status = "degraded"
+        degraded_reason = "cookie_wall"
+        next_action = "Cookie wall detected. Open site manually and retry."
+
     package = build_company_package(
         run_id=run_id,
         maps_url=maps_url,
@@ -616,8 +637,9 @@ def process_maps_ingest(
         pages_fetched=scan_outcome.pages_fetched,
         note=note,
         tags=tags,
-        pipeline_status="ok",
-        next_action="",
+        pipeline_status=pipeline_status,
+        degraded_reason=degraded_reason,
+        next_action=next_action,
     )
     write_company_package(run_id, package)
     return {"run_id": run_id, "status": "ok"}

@@ -1,0 +1,48 @@
+{
+  "status": "degraded",
+  "degraded_reason": "website_missing",
+  "schema_version": "0.1",
+  "run_id": "fixture_website_missing",
+  "created_at": "2026-01-01T00:00:00Z",
+  "tool_version": "0.7.2",
+  "git_sha": "abcdef0",
+  "source": {
+    "source_ref": "https://www.google.com/maps",
+    "place_id": "place_123",
+    "canonical_domain": "",
+    "website_source": "places",
+    "resolver_notes": "Places had no websiteUri."
+  },
+  "hiring": {
+    "status": "uncertain",
+    "confidence": 0.0,
+    "signals": [],
+    "evidence": []
+  },
+  "industry": { "labels": [], "confidence": 0.0, "evidence": [] },
+  "roles": {
+    "detected": [],
+    "fit": { "score": 0, "green_flags": [], "red_flags": [], "evidence": [] }
+  },
+  "links": {
+    "maps_url": "https://www.google.com/maps",
+    "website_url": "",
+    "careers_urls": [],
+    "ats_urls": [],
+    "contact_url": ""
+  },
+  "next_action": "Paste official website URL to proceed.",
+  "safety": {
+    "robots_respected": "unknown",
+    "pages_fetched": 0,
+    "skipped_reasons": [],
+    "errors": ["website_missing"],
+    "checked_urls": [],
+    "llm_used": false,
+    "prompt_version": "",
+    "ollama_model": "",
+    "ollama_temperature": 0.0,
+    "deterministic": false
+  },
+  "notes": { "note": "", "tags": [] }
+}
