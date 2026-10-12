@@ -36,6 +36,19 @@ ACCESS_MODE_LABELS = {
 # ---- Lead scoring -------------------------------------------------------
 # Lead scoring lives in apprscan.leads (shared with scripts/lead_targets.py).
 from apprscan.leads import LEAD_AXES, LEAD_SCORE_MAX, add_lead_scores  # noqa: E402
+from apprscan import feedback  # noqa: E402
+from apprscan.employer_fit import (  # noqa: E402
+    EMPLOYER_AXES,
+    EMPLOYER_SCORE_MAX,
+    add_employer_scores,
+)
+
+# Map axes: sales-lead axes + employer-fit axes + the employer total. Each
+# axis normalises its colour against its own max (leads max 8, employer 10).
+MAP_AXES = {**LEAD_AXES, **EMPLOYER_AXES, "Kokonaisuus": "e_fit"}
+AXIS_MAX = {col: LEAD_SCORE_MAX for col in LEAD_AXES.values()}
+AXIS_MAX.update({col: EMPLOYER_SCORE_MAX for col in EMPLOYER_AXES.values()})
+AXIS_MAX["e_fit"] = EMPLOYER_SCORE_MAX
 
 # ---------------------------------------------------------------------------
 # Config
@@ -272,8 +285,12 @@ df["commute_min"] = [
 if commute_limit_on:
     df = df[df["commute_min"].notna() & (df["commute_min"] <= max_commute)]
 
-# Lead scores (s_webshop/s_pim/s_data) for the map and the Liidit tab.
+# Lead scores (s_webshop/s_pim/s_data) for the map and the Liidit tab, and
+# employer-fit scores (e_industry/e_hiring/e_commute/e_fit) for the
+# Työnantajasopivuus tab. commute_min is already computed above, so the fit
+# scores respond to the sidebar's origin/mode/overhead choices.
 df = add_lead_scores(df)
+df = add_employer_scores(df)
 
 # ---------------------------------------------------------------------------
 # Main content
@@ -309,8 +326,8 @@ col5.metric(
 st.divider()
 
 # ---- Map ----------------------------------------------------------------
-tab_map, tab_reach, tab_table, tab_stats, tab_leads = st.tabs(
-    ["🗺️ Kartta", "🚆 Junasaavutettavuus", "📋 Yritykset", "📊 Tilastot", "🎯 Liidit"]
+tab_map, tab_reach, tab_table, tab_stats, tab_leads, tab_fit = st.tabs(
+    ["🗺️ Kartta", "🚆 Junasaavutettavuus", "📋 Yritykset", "📊 Tilastot", "🎯 Liidit", "💼 Työnantajasopivuus"]
 )
 
 with tab_map:
@@ -323,8 +340,8 @@ with tab_map:
         # by city (station). With the station filter this gives e.g. "top 100
         # leads of Kerava, next 100, ...".
         c1, c2, c3 = st.columns(3)
-        axis_label = c1.selectbox("Liidi-akseli", list(LEAD_AXES.keys()))
-        axis_col = LEAD_AXES[axis_label]
+        axis_label = c1.selectbox("Pisteytysakseli", list(MAP_AXES.keys()))
+        axis_col = MAP_AXES[axis_label]
         sort_choice = c2.selectbox(
             "Järjestys", ["Liidipisteet", "Kaupunki (asema)", "Lähin asemaa"]
         )
@@ -353,7 +370,7 @@ with tab_map:
         hi = min(lo + page_size, total)
         page_df = valid_coords.iloc[lo:hi].copy()
         st.caption(
-            f"Näytetään {lo + 1}–{hi} / {total} yritystä · väri & koko = liidipisteet ({axis_label})"
+            f"Näytetään {lo + 1}–{hi} / {total} yritystä · väri & koko = {axis_label}"
         )
 
         # Many companies geocode to the same street point, so a page of 100 can
@@ -370,13 +387,16 @@ with tab_map:
         )
         page_df["lead_score"] = page_df[axis_col]
 
+        # Normalise against the chosen axis's own max, not a hardcoded one.
+        _axis_max = AXIS_MAX.get(axis_col, LEAD_SCORE_MAX)
+
         def _lead_color(s):
-            t = max(0.0, min(1.0, (float(s) if pd.notna(s) else 0) / LEAD_SCORE_MAX))
+            t = max(0.0, min(1.0, (float(s) if pd.notna(s) else 0) / _axis_max))
             return [int(70 + 170 * t), int(170 - 110 * t), 70, 200]
 
         page_df["color"] = page_df["lead_score"].map(_lead_color)
         page_df["radius"] = page_df["lead_score"].map(
-            lambda s: 50 + (float(s) if pd.notna(s) else 0) * 20
+            lambda s: 50 + (float(s) if pd.notna(s) else 0) / _axis_max * 160
         )
 
         # What the LLM wrote about the site (+ hiring/shop flags), for the tooltip.
@@ -737,6 +757,138 @@ with tab_leads:
     )
     st.download_button(
         "⬇️ Lataa liidit CSV", data=csv_leads, file_name="liidit.csv", mime="text/csv"
+    )
+
+# ---- Employer fit tab (rule scores + feedback learning) --------------------
+with tab_fit:
+    st.subheader("💼 Työnantajasopivuus — sopiko tämä yritys työnantajaksi sinulle?")
+    st.caption(
+        "Pisteet 0–10 = alan sopivuus (TOI-koodi, 0–4) + rekrytointi (AI havainnut "
+        "rekrytoinnin 0–3, muuten toimiva sivusto 0–1) + työmatka valitsemaltasi "
+        "asemalta (0–3). Merkitse kiinnostavat ja ei-kiinnostavat yritykset "
+        "Palautte-sarakkeeseen — valinnoistasi koulutetaan myöhemmin "
+        "koneoppimismalli, joka oppii mieleisesi työnantajat."
+    )
+
+    fit_frame = df.copy()
+
+    # M7 (train_fit_model.py) kirjoittaa fit_prob-sarakkeen. Siihen asti
+    # järjestys perustuu sääntöpisteisiin e_fit.
+    if "fit_prob" in fit_frame.columns:
+        score_col = "fit_prob"
+        st.caption("Järjestys: koneoppimispisteet (fit_prob).")
+    else:
+        score_col = "e_fit"
+        st.info(
+            "🤖 Koneoppimispisteitä ei ole vielä koulutettu. Merkitse yrityksille "
+            "palautetta — 30 merkinnän jälkeen pisteet alkavat oppia valinnoistasi. "
+            "Siihen asti järjestys perustuu sääntöpisteisiin (e_fit)."
+        )
+
+    show_all_fit = st.checkbox("Näytä kaikki", value=False, key="fit_show_all")
+    if show_all_fit:
+        top_fit = fit_frame.sort_values(
+            [score_col, "commute_min"], ascending=[False, True], na_position="last"
+        )
+    else:
+        n_fit = st.slider("Näytä top-N", 5, 500, 30, step=5)
+        top_fit = fit_frame.sort_values(
+            [score_col, "commute_min"], ascending=[False, True], na_position="last"
+        ).head(n_fit)
+
+    # Aiemmat palautemerkit (paikallinen sqlite) -> Palaute-sarakkeen alkuarvot.
+    try:
+        _conn = feedback.connect()
+        known = feedback.load(_conn)
+        _conn.close()
+    except Exception:
+        known = pd.DataFrame(columns=["business_id", "label"])
+    labels_by_id = (
+        dict(zip(known["business_id"].astype(str), known["label"]))
+        if not known.empty
+        else {}
+    )
+
+    fit_cols = [
+        "business_id", "name", "toi_description", "nearest_station",
+        "dist_km", "commute_min", "best_website", "registered",
+        "e_industry", "e_hiring", "e_commute", score_col,
+    ]
+    fit_display = top_fit[fit_cols].copy()
+    fit_display["Palaute"] = (
+        fit_display["business_id"].astype(str).map(labels_by_id).fillna("")
+    )
+    fit_display["commute_min"] = (
+        pd.to_numeric(fit_display["commute_min"], errors="coerce")
+        .round(0)
+        .astype("Int64")
+    )
+
+    _score_config = (
+        st.column_config.ProgressColumn(
+            "Sopivuus", min_value=0, max_value=EMPLOYER_SCORE_MAX, format="%d/10"
+        )
+        if score_col == "e_fit"
+        else st.column_config.NumberColumn("Sopivuus (ML)", format="%.3f")
+    )
+    edited = st.data_editor(
+        fit_display.reset_index(drop=True),
+        width="stretch",
+        column_config={
+            "business_id": "Y-tunnus",
+            "name": "Yritys",
+            "toi_description": "Toimiala (tarkennettu)",
+            "nearest_station": "Asema",
+            "dist_km": st.column_config.NumberColumn("Etäisyys (km)", format="%.2f km"),
+            "commute_min": st.column_config.NumberColumn("Työmatka (min)", format="%.0f"),
+            "best_website": st.column_config.LinkColumn("Verkkosivut"),
+            "registered": "Perustettu",
+            "e_industry": st.column_config.NumberColumn("Alan pisteet", format="%.0f"),
+            "e_hiring": st.column_config.NumberColumn("Rekrypisteet", format="%.0f"),
+            "e_commute": st.column_config.NumberColumn("Matkapisteet", format="%.0f"),
+            score_col: _score_config,
+            "Palaute": st.column_config.SelectboxColumn(
+                "Palaute", options=["", *feedback.LABELS]
+            ),
+        },
+        disabled=[c for c in fit_cols if c != "Palaute"],
+        height=420,
+        key="fit_editor",
+    )
+
+    if st.button("💾 Tallenna palaute"):
+        saved = 0
+        _conn = feedback.connect()
+        try:
+            for _, row in edited.iterrows():
+                bid = str(row["business_id"])
+                new_label = str(row["Palaute"] or "").strip()
+                if new_label == labels_by_id.get(bid, ""):
+                    continue  # ei muutosta
+                if new_label == "":
+                    continue  # tyhjä = ei merkintää
+                feedback.record(_conn, bid, new_label)
+                saved += 1
+        finally:
+            _conn.close()
+        if saved:
+            st.success(f"Tallennettu {saved} uutta merkintää.")
+            st.rerun()  # päivittää Palaute-sarakkeen alkuarvot
+        else:
+            st.info("Ei muuttuneita merkintöjä tallennettavaksi.")
+
+    st.caption(f"{len(edited)} yritystä näkyvissä ja CSV-latauksessa.")
+
+    csv_fit = edited.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+    st.download_button(
+        "⬇️ Lataa työnantajasopivuus CSV",
+        data=csv_fit,
+        file_name="tyonantajasopivuus.csv",
+        mime="text/csv",
+    )
+    st.caption(
+        "💾 Palaute tallentuu paikalliseen data/feedback.sqlite-tiedostoon — "
+        "pilvikopio sovelluksesta on vain luettavissa."
     )
 
 # ---- Stats --------------------------------------------------------------
