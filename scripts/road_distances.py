@@ -33,7 +33,7 @@ from apprscan.transit import STATION_COORDS as RAIL
 _ROOT = Path(__file__).resolve().parents[1]
 CSV_PATH = _ROOT / "out" / "companies.csv"
 CACHE_PATH = _ROOT / "data" / "road_distance_cache.sqlite"
-AREAS = ["Lahti", "Kerava", "Savio", "Pasila", "Tikkurila"]
+AREAS = ["Lahti", "Kerava", "Savio", "Pasila", "Tikkurila", "Järvenpää", "Hyvinkää", "Riihimäki"]
 GRAPH_DIST_M = 6000  # covers companies up to ~4.3 km from the station + margin
 DETOUR_FALLBACK = 1.35  # haversine × this when the network can't route a point
 

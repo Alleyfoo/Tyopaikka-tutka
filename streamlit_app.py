@@ -71,6 +71,9 @@ STATION_INFO = {
         ("Savio", "Savio (Kerava Etelä)"),
         ("Pasila", "Helsinki Pasila"),
         ("Tikkurila", "Tikkurila (Vantaa)"),
+        ("Järvenpää", "Järvenpää"),
+        ("Hyvinkää", "Hyvinkää"),
+        ("Riihimäki", "Riihimäki"),
     ]
 }
 

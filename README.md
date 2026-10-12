@@ -49,7 +49,8 @@ streamlit run streamlit_app.py
 4. Click Deploy — no configuration needed, data is committed in `out/companies.csv`
 
 ## Covered areas
-Lahti, Kerava, Savio, Pasila, Tikkurila — ~3 km radius from each railway station.
+Lahti, Kerava, Savio, Pasila, Tikkurila, Järvenpää, Hyvinkää, Riihimäki —
+~3 km radius from each railway station.
 
 ## Pipeline
 

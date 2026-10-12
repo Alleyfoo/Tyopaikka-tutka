@@ -31,6 +31,9 @@ STATIONS = [
     {"label": "Savio", "lat": 60.3804, "lon": 25.0977, "municipality": "Kerava"},
     {"label": "Pasila", "lat": 60.1987, "lon": 24.9334, "municipality": "Helsinki"},
     {"label": "Tikkurila", "lat": 60.2925, "lon": 25.0439, "municipality": "Vantaa"},
+    {"label": "Järvenpää", "lat": 60.4733, "lon": 25.0903, "municipality": "Järvenpää"},
+    {"label": "Hyvinkää", "lat": 60.6310, "lon": 24.8590, "municipality": "Hyvinkää"},
+    {"label": "Riihimäki", "lat": 60.7186, "lon": 24.7740, "municipality": "Riihimäki"},
 ]
 
 
