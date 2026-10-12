@@ -35,11 +35,11 @@ The LightGBM sorter is built but dormant behind the cold-start gate.
 
 The scanner finds employers; it does not yet watch them for openings.
 
-- **2.1 Careers-page column**: during job-signal probing we discover
+- **2.1 Careers-page column** *(done — `scripts/watchlist.py`, commit `5e65eec`)*: during job-signal probing we discover
   careers hrefs (e.g. mysteerio.fi/tyopaikat) but never persist them.
   Add an additive `careers_url` column to companies.csv for the
   kiinnostaa/hakenee pool.
-- **2.2 `scripts/watchlist.py`**: re-fetch the watchlist companies'
+- **2.2 `scripts/watchlist.py`** *(done — commit `5e65eec`)*: re-fetch the watchlist companies'
   homepages + careers pages on demand, diff against the last snapshot,
   and write `out/watchlist_alerts.csv` (new job signal / changed
   openings). Small scope: only the ~10–50 labeled companies, so it is
@@ -65,7 +65,7 @@ The scanner finds employers; it does not yet watch them for openings.
 ## Track 4 — Dashboard & UX
 
 - **4.1 Remove the obsolete "Train reach" page** from `curate_app.py`
-  (tiny commit — do only after user confirms, per plan note).
+  *(done — commit `7571d00`)*.
 - **4.2 "Hakemukset" view**: a filter over `hakenee`-labeled companies
   with application date + free-text status note, so applied places are
   tracked in one place. The `hakenee` label already exists; this is
