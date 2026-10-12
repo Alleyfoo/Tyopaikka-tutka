@@ -52,6 +52,10 @@ from typing import Any
 import requests as _requests
 import pandas as pd
 
+# Decorative prints (≤, →, ─) crash when stdout is redirected to a
+# cp1252-encoded log file on Windows. Force UTF-8 so logs stay valid.
+sys.stdout.reconfigure(encoding="utf-8")
+
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT / "src"))
 
