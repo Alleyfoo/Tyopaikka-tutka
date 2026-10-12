@@ -47,7 +47,13 @@ def _overpass_streets(lat: float, lon: float, radius_m: int) -> list[str]:
     last_exc: Exception | None = None
     for mirror in OVERPASS_MIRRORS:
         try:
-            resp = requests.get(mirror, params={"data": query}, timeout=70)
+            resp = requests.get(
+                mirror,
+                params={"data": query},
+                timeout=70,
+                # The default python-requests User-Agent is rejected with 406.
+                headers={"User-Agent": "TyopaikkaSkanneri/1.0 (street discovery)"},
+            )
             resp.raise_for_status()
             data = resp.json()
             names: set[str] = set()
