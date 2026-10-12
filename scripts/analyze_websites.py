@@ -15,7 +15,7 @@ can be stopped and resumed.
 Usage
 -----
   # Install Ollama: https://ollama.com  then pull a model:
-  #   ollama pull gemma4
+  #   ollama pull ornith-1.5:9b
   #
   # Analyse Kerava/Savio/Haarajoki companies (default):
   python scripts/analyze_websites.py
@@ -25,19 +25,21 @@ Usage
 
   # Custom model and area:
   python scripts/analyze_websites.py --model gemma4:27b --areas Lahti Kerava
+  # (cache is keyed on url+model+prompt version, so switching models re-analyses)
 
   # Limit to N companies (for testing):
   python scripts/analyze_websites.py --limit 10
 
 Output
 ------
-Writes columns llm_has_shop, llm_platform, llm_headcount, llm_description
-back to out/companies.csv in-place.
+Writes columns llm_has_shop, llm_platform, llm_headcount, llm_description,
+llm_model back to out/companies.csv in-place.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sqlite3
 import time
@@ -53,7 +55,7 @@ CSV_PATH = _ROOT / "out" / "companies.csv"
 CACHE_PATH = _ROOT / "data" / "website_analysis.sqlite"
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
-DEFAULT_MODEL = "gemma4"
+DEFAULT_MODEL = "ornith-1.5:9b"
 DEFAULT_AREAS = ["Haarajoki", "Savio", "Kerava"]
 
 FETCH_TIMEOUT = 15  # seconds for homepage fetch
@@ -78,6 +80,29 @@ PROMPT_TEMPLATE = textwrap.dedent("""\
     {page_text}
 """)
 
+# Which prompt this run speaks — changes whenever PROMPT_TEMPLATE changes.
+# Part of the cache key, so a new prompt never serves stale results.
+PROMPT_VERSION = hashlib.sha256(PROMPT_TEMPLATE.encode("utf-8")).hexdigest()[:8]
+
+# Structured-output schema for Ollama's format= parameter: the model is forced
+# to answer in exactly this shape (3 bools, 2 string-or-null, 2 strings).
+RESULT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "has_shop": {"type": "boolean"},
+        "has_online_sales": {"type": "boolean"},
+        "is_hiring": {"type": "boolean"},
+        "platform": {"type": ["string", "null"]},
+        "headcount": {"type": ["string", "null"]},
+        "sells": {"type": "string"},
+        "description": {"type": "string"},
+    },
+    "required": [
+        "has_shop", "has_online_sales", "is_hiring",
+        "platform", "headcount", "sells", "description",
+    ],
+}
+
 # ---------------------------------------------------------------------------
 # Cache
 # ---------------------------------------------------------------------------
@@ -86,6 +111,7 @@ PROMPT_TEMPLATE = textwrap.dedent("""\
 def _open_cache(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
+    # Legacy table (URL-only key) — kept for provenance; never read again.
     conn.execute("""
         CREATE TABLE IF NOT EXISTS analysis (
             url TEXT PRIMARY KEY,
@@ -93,12 +119,39 @@ def _open_cache(path: Path) -> sqlite3.Connection:
             fetched_at TEXT DEFAULT (datetime('now'))
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS analysis_v2 (
+            url TEXT NOT NULL,
+            model TEXT NOT NULL,
+            prompt_version TEXT NOT NULL,
+            result TEXT,
+            fetched_at TEXT DEFAULT (datetime('now')),
+            PRIMARY KEY (url, model, prompt_version)
+        )
+    """)
+    # One-time migration: copy legacy rows under '(legacy)' markers so old
+    # results stay visible but are never a cache hit for a real run.
+    legacy_rows = conn.execute("SELECT COUNT(*) FROM analysis").fetchone()[0]
+    migrated = conn.execute(
+        "SELECT COUNT(*) FROM analysis_v2 WHERE model='(legacy)'"
+    ).fetchone()[0]
+    if legacy_rows and not migrated:
+        conn.execute("""
+            INSERT OR IGNORE INTO analysis_v2 (url, model, prompt_version, result, fetched_at)
+            SELECT url, '(legacy)', '(legacy)', result, fetched_at FROM analysis
+        """)
+        print(f"Siirrettiin {legacy_rows} vanhaa analyysiä analysis_v2-tauluun (merkitty '(legacy)').")
     conn.commit()
     return conn
 
 
-def _cache_get(conn: sqlite3.Connection, url: str) -> dict | None:
-    row = conn.execute("SELECT result FROM analysis WHERE url=?", (url,)).fetchone()
+def _cache_get(
+    conn: sqlite3.Connection, url: str, model: str, prompt_version: str
+) -> dict | None:
+    row = conn.execute(
+        "SELECT result FROM analysis_v2 WHERE url=? AND model=? AND prompt_version=?",
+        (url, model, prompt_version),
+    ).fetchone()
     if row and row[0]:
         try:
             return json.loads(row[0])
@@ -107,10 +160,17 @@ def _cache_get(conn: sqlite3.Connection, url: str) -> dict | None:
     return None
 
 
-def _cache_set(conn: sqlite3.Connection, url: str, result: dict) -> None:
+def _cache_set(
+    conn: sqlite3.Connection,
+    url: str,
+    model: str,
+    prompt_version: str,
+    result: dict,
+) -> None:
     conn.execute(
-        "INSERT OR REPLACE INTO analysis (url, result) VALUES (?, ?)",
-        (url, json.dumps(result, ensure_ascii=False)),
+        "INSERT OR REPLACE INTO analysis_v2 (url, model, prompt_version, result) "
+        "VALUES (?, ?, ?, ?)",
+        (url, model, prompt_version, json.dumps(result, ensure_ascii=False)),
     )
     conn.commit()
 
@@ -176,7 +236,8 @@ def _call_ollama(page_text: str, model: str, json_mode: bool = True) -> dict | N
     # Some models (e.g. qwen3.5) return an empty body under Ollama's JSON mode;
     # the prompt asks for JSON and we extract it from text anyway, so it's optional.
     if json_mode:
-        payload["format"] = "json"
+        # Structured outputs: Ollama constrains the answer to RESULT_SCHEMA.
+        payload["format"] = RESULT_SCHEMA
     try:
         resp = httpx.post(OLLAMA_URL, json=payload, timeout=OLLAMA_TIMEOUT)
         resp.raise_for_status()
@@ -264,7 +325,7 @@ def main() -> None:
         f"Companies to analyse: {len(subset)} "
         f"(areas: {', '.join(args.areas) if args.areas != ['all'] else 'all'})"
     )
-    print(f"Model: {args.model}\n")
+    print(f"Model: {args.model} · prompt: {PROMPT_VERSION}\n")
 
     conn = _open_cache(CACHE_PATH)
     results: dict[str, dict] = {}
@@ -273,7 +334,11 @@ def main() -> None:
         url = str(row.best_website)
         name = row.name
 
-        cached = None if args.reanalyze else _cache_get(conn, url)
+        cached = (
+            None
+            if args.reanalyze
+            else _cache_get(conn, url, args.model, PROMPT_VERSION)
+        )
         if cached is not None:
             print(f"[{i}/{len(subset)}] {name} — cached ✓")
             results[row.business_id] = cached
@@ -304,7 +369,7 @@ def main() -> None:
                 val = None
             result[field] = _strip_emoji(val)
 
-        _cache_set(conn, url, result)
+        _cache_set(conn, url, args.model, PROMPT_VERSION, result)
         results[row.business_id] = result
 
         shop_flag = (
@@ -339,6 +404,7 @@ def main() -> None:
         "llm_headcount",
         "llm_sells",
         "llm_description",
+        "llm_model",
     ]:
         if col not in df.columns:
             df[col] = pd.NA
@@ -366,6 +432,7 @@ def main() -> None:
         df.loc[mask, "llm_headcount"] = _clean(res.get("headcount"))
         df.loc[mask, "llm_sells"] = _clean(res.get("sells"))
         df.loc[mask, "llm_description"] = _clean(res.get("description"))
+        df.loc[mask, "llm_model"] = args.model  # provenance: mikä malli analysoi
 
     df.drop(columns=["best_website"], errors="ignore").to_csv(
         CSV_PATH, index=False, encoding="utf-8-sig"
