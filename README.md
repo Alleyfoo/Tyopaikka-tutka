@@ -140,6 +140,22 @@ under Ollama's JSON mode.
 python scripts/analyze_websites.py --ids-file out/lead_targets.csv --model qwen3.5:9b --no-json-mode
 ```
 
+### 4d. Catalog-heavy webshop detection
+Answers "which retail/wholesale companies run a webshop with a large online
+catalog?" — the Bygghemma / Puolenkuun Pelit style, which TOI-based lead
+scoring can't see. Probes each unique live 46/47 website (homepage +
+robots.txt + sitemap), fingerprints the e-commerce platform, and estimates
+the catalog size from product URLs. Results are cached per host in
+`data/webshop_cache.sqlite`; output is `out/webshops.csv`, ranked by shop
+score and catalog estimate.
+```
+python scripts/find_webshops.py --groups 46,47 --top 40
+```
+Then analyse the finds with Ollama:
+```
+python scripts/analyze_websites.py --ids-file out/webshop_targets.csv
+```
+
 ### 5. Hiring-signal scan (Ollama)
 Scans company websites for active hiring signals using a local LLM.
 ```
