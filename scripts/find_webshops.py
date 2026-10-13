@@ -66,7 +66,7 @@ MAX_SITEMAPS_PER_HOST = 10
 
 # Bump when probe logic changes (patterns, caps, recursion) — cache entries
 # written by an older version are ignored and re-probed.
-PROBE_VERSION = 2
+PROBE_VERSION = 3
 
 # Platform fingerprints: substring -> platform name (lowercase HTML match).
 PLATFORMS = {
@@ -77,8 +77,9 @@ PLATFORMS = {
     "woocommerce": "WooCommerce",
     "wp-content/plugins/woocommerce": "WooCommerce",
     "magento": "Magento",
+    "x-magento": "Magento",
+    "mage/cookies": "Magento",
     "prestashop": "PrestaShop",
-    "mage/": "Magento",
     "wixstatic": "Wix",
     "static.wixstatic": "Wix",
     "squarespace": "Squarespace",
@@ -116,6 +117,19 @@ def _product_key(url: str) -> str:
     if QUERY_KEYED_RE.search(url):
         return url
     return path
+
+
+# Leading language path segment: multilingual shops list every page per
+# language in per-language sitemaps (fi/, sv/, en/...), so counting raw locs
+# triple-counts the same catalog. Dropping the segment collapses them.
+LANG_SEGMENT_RE = re.compile(r"^(?:https?://[^/]+)?/(fi|sv|en|de|ru|fr|et|no)(?=/)")
+
+
+def _flat_key(url: str) -> str:
+    """Sitemap-size dedupe key: product key with the language segment removed."""
+    path = _product_key(url)
+    m = LANG_SEGMENT_RE.match(path)
+    return path[m.end():] if m else path
 
 
 def _ensure_db(conn: sqlite3.Connection) -> None:
@@ -183,10 +197,12 @@ def _has_cart(html: str) -> bool:
 def _sitemap_product_count(session: requests.Session, base_url: str) -> dict:
     """Estimate catalog size from the sitemap chain (robots.txt first).
 
-    Returns {"products": <product URLs>, "urls": <all URLs seen>, "capped":
+    Returns {"products": <product URLs>, "urls": <unique URLs seen>, "capped":
     whether the MAX_SITEMAP_URLS cap was hit}. Child sitemaps are recursed one
     level under ANY name — shops split theirs as products_part_1.xml (osC)
-    just as often as sitemap_products_1.xml (Shopify).
+    just as often as sitemap_products_1.xml (Shopify). URLs are deduped with
+    the language segment dropped, so per-language sitemaps (fi/sv/en) don't
+    count the same catalog three times.
     """
     robots = _get(session, urljoin(base_url, "/robots.txt"))
     sitemap_urls: list[str] = []
@@ -198,7 +214,24 @@ def _sitemap_product_count(session: requests.Session, base_url: str) -> dict:
         sitemap_urls.append(urljoin(base_url, "/sitemap.xml"))
     sitemap_urls = sitemap_urls[:MAX_SITEMAPS_PER_HOST]
 
+    # Per-language sitemap listings (fi/, sv/, en/ paths) carry the same
+    # catalog with TRANSLATED slugs, so per-URL dedupe can't collapse them —
+    # measure one language only: FI first (Finnish shops), else the first.
+    # Non-language sitemaps (indexes) are always kept.
+    def _sm_lang(u: str) -> str | None:
+        m = LANG_SEGMENT_RE.match(urlparse(u).path)
+        return m.group(1) if m else None
+
+    langs = [_sm_lang(u) for u in sitemap_urls]
+    if len(set(langs)) > 1:
+        keep = "fi" if "fi" in langs else langs[0]
+        sitemap_urls = [
+            u for u, lang in zip(sitemap_urls, langs)
+            if lang is None or lang == keep
+        ]
+
     product_urls: set[str] = set()
+    flat_urls: set[str] = set()
     total_locs = 0
     for sm_url in sitemap_urls:
         xml = _get(session, sm_url, timeout=TIMEOUT_SITEMAP)
@@ -217,20 +250,25 @@ def _sitemap_product_count(session: requests.Session, base_url: str) -> dict:
                 child_locs = SITEMAP_LOC_RE.findall(child)
                 for c in child_locs:
                     total_locs += 1
+                    flat_urls.add(_flat_key(c))
                     if PRODUCT_URL_RE.search(c):
                         product_urls.add(_product_key(c))
                     if total_locs >= MAX_SITEMAP_URLS:
                         break
             else:
                 total_locs += 1
+                flat_urls.add(_flat_key(loc))
                 if PRODUCT_URL_RE.search(loc):
                     product_urls.add(_product_key(loc))
         if total_locs >= MAX_SITEMAP_URLS:
             break
+    capped = total_locs >= MAX_SITEMAP_URLS
+    # Under the cap the language-deduped count is the honest page count; at
+    # the cap the raw count is the visible floor.
     return {
         "products": len(product_urls),
-        "urls": total_locs,
-        "capped": total_locs >= MAX_SITEMAP_URLS,
+        "urls": total_locs if capped else len(flat_urls),
+        "capped": capped,
     }
 
 
@@ -290,13 +328,20 @@ def _shop_score(r: dict) -> int:
         score += 2
     sitemap_n = r.get("sitemap_products") or 0
     home_n = r.get("homepage_product_links") or 0
-    # Flat-slug catalogs: product patterns match nothing, but a huge sitemap
-    # on an e-commerce site still measures the catalog (e.g. taloon.com).
+    # Flat-slug catalogs: product patterns capture (almost) none of a huge
+    # sitemap — the sitemap size is still a floor for the catalog
+    # (e.g. taloon.com flat slugs, baronsfood.fi B2B pages behind login).
+    # The universe here is already TOI 46/47 companies, so no separate
+    # platform/cart gate is required for the floor.
     flat_n = 0
-    if not sitemap_n and not home_n:
-        su = r.get("sitemap_urls") or 0
-        if su >= 500 and (r.get("platform") or r.get("cart_signal")):
-            flat_n = su
+    su = r.get("sitemap_urls") or 0
+    if su >= 500 and (sitemap_n + home_n) < su * 0.1:
+        flat_n = su
+        # A big flat-sitemap floor is e-commerce evidence in itself: the
+        # catalog pages exist even though no platform/cart marker does
+        # (B2B shops hide prices behind login, e.g. baronsfood.fi).
+        if flat_n >= 500:
+            score += 1
     if sitemap_n >= 500 or home_n >= 30 or flat_n >= 500:
         score += 4
     elif sitemap_n >= 100 or home_n >= 10 or flat_n >= 100:
@@ -398,17 +443,19 @@ def main() -> None:
         """Best catalog estimate: product URLs first, big-flat-sitemap floor second."""
         sp = row["shop_sitemap_products"]
         hl = row["shop_homepage_product_links"]
+        su = row["shop_sitemap_urls"]
+        # Product patterns captured <10% of a big sitemap (flat slugs or
+        # B2B pages behind login, e.g. baronsfood.fi): the raw sitemap size
+        # is a floor for the catalog. No platform/cart gate — this dataset
+        # is TOI 46/47 companies by construction.
+        if pd.notna(su) and float(su or 0) >= 500:
+            known = max(float(sp or 0), float(hl or 0))
+            if known < float(su) * 0.1:
+                return su
         if pd.notna(sp) and float(sp or 0) > 0:
             return sp
         if pd.notna(hl) and float(hl or 0) > 0:
             return hl
-        # Product patterns matched nothing but the sitemap is huge on an
-        # e-commerce site (flat slugs, e.g. taloon.com): the raw sitemap
-        # size is a floor for the catalog.
-        su = row["shop_sitemap_urls"]
-        ecommerce = pd.notna(row["shop_platform"]) or bool(row["shop_cart_signal"])
-        if ecommerce and pd.notna(su) and float(su or 0) >= 500:
-            return su
         return hl  # may be NaN
 
     sel["shop_catalog_estimate"] = sel.apply(_catalog_estimate, axis=1)

@@ -173,9 +173,23 @@ Measurement notes (all learned from the reference cases):
 - The sitemap cap is 100k URLs; a host that hits it is marked capped and
   its estimate displays as a floor (`100 000+`). taloon.com measures 100 000+
   this way (its full sitemap is ~200k URLs).
-- When product URL patterns match nothing but the sitemap is huge on an
-  e-commerce site (flat slugs), the raw sitemap size is used as the floor
-  estimate.
+- When product URL patterns match <10% of a huge sitemap (≥500 URLs), the
+  raw sitemap size is used as the floor estimate. The dataset is TOI 46/47
+  by construction, so no separate platform/cart gate is needed. This floor
+  is also scored as e-commerce evidence (+1): B2B shops like baronsfood.fi
+  hide prices/cart behind login, so the catalog pages in the sitemap are
+  the only public proof of the shop.
+- Platform fingerprints must not be prefixes of innocent HTML: `"mage/"`
+  matched `data:image/` base64 data-URI images and falsely tagged nearly
+  every modern site as Magento. Magento is now detected via `magento` /
+  `x-magento` / `mage/cookies` only.
+- Multilingual sites list per-language sitemaps in robots.txt
+  (`/fi/sitemap.xml`, `/sv/sitemap_sv.xml`, ...). Language variants use
+  TRANSLATED slugs (`/fi/juomat` vs `/sv/drycker`), so per-URL dedupe
+  can't collapse them — only one language is measured (FI first, Finnish
+  shops), which keeps baronsfood.fi at its honest per-language size
+  (2 881) instead of 3× that. Sitemaps without a language prefix
+  (taloon.com's `products_part_N.xml` children) are never filtered.
 - A WAF-blocked homepage (403) still gets its sitemap chain counted —
   puolenkuunpelit.com measures 100 000+ despite a bot-challenged homepage.
   Because of this, `unreachable` companies are probed by default (the
