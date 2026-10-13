@@ -74,6 +74,8 @@ STATION_INFO = {
         ("Järvenpää", "Järvenpää"),
         ("Hyvinkää", "Hyvinkää"),
         ("Riihimäki", "Riihimäki"),
+        ("Haarajoki", "Haarajoki (Järvenpää)"),
+        ("Henna", "Henna (Mäntsälä)"),
     ]
 }
 
@@ -291,16 +293,44 @@ if only_hiring and "llm_is_hiring" in df.columns:
 
 # Train commute from the chosen origin: rail time + last-mile (walking road
 # distance, dist_km) + a fixed wait/access overhead so the estimate isn't faster
-# than the real journey.
+# than the real journey. Two connection qualities: the best case (tightest
+# possible change of trains) and the rush case (typical morning connection wait),
+# so the UI can show the range the timetable's connection quality adds.
 _rail = transit.rail_minutes_from(origin_station)
-df["commute_min"] = [
-    transit.commute_minutes(
-        station, dist, mode=access_mode, rail_minutes=_rail, overhead_min=overhead_min
+_rail_rush = transit.rail_minutes_from(origin_station, connection="rush")
+
+
+def _commute_minutes(row_rail, station, dist):
+    return transit.commute_minutes(
+        station, dist, mode=access_mode, rail_minutes=row_rail, overhead_min=overhead_min
     )
-    for station, dist in zip(df["nearest_station"], df["dist_km"])
+
+
+def _commute_display(best, rush):
+    """Format the commute range: typical first, best case in parentheses.
+
+    E.g. "58 min (nopein 36)" when the Kerava connection wait dominates the
+    rush trip, plain "31 min" for destinations where the two qualities agree.
+    """
+    if best is None or pd.isna(best):
+        return "–"
+    if rush is not None and pd.notna(rush) and rush > best + 0.5:
+        return f"{rush:.0f} min (nopein {best:.0f})"
+    return f"{best:.0f} min"
+
+
+df["commute_min"] = [
+    _commute_minutes(_rail, s, d) for s, d in zip(df["nearest_station"], df["dist_km"])
 ]
+df["commute_min_rush"] = [
+    _commute_minutes(_rail_rush, s, d) for s, d in zip(df["nearest_station"], df["dist_km"])
+]
+# The commute limit is checked against the rush estimate: an employer that is
+# only reachable inside the limit with a perfect connection is not inside it.
 if commute_limit_on:
-    df = df[df["commute_min"].notna() & (df["commute_min"] <= max_commute)]
+    df = df[
+        df["commute_min_rush"].notna() & (df["commute_min_rush"] <= max_commute)
+    ]
 
 # Lead scores (s_webshop/s_pim/s_data) for the map and the Liidit tab, and
 # employer-fit scores (e_industry/e_hiring/e_commute/e_fit) for the
@@ -334,10 +364,18 @@ else:
 col3.metric("Eri toimialoja", df["industry"].nunique())
 col4.metric("Alueita", df["nearest_station"].nunique())
 _fastest = df["commute_min"].min()
+_fastest_rush = df["commute_min_rush"].min()
 col5.metric(
     "Nopein työmatka",
-    f"{_fastest:.0f} min" if pd.notna(_fastest) else "–",
-    help=f"Junalla asemalta {origin_station}, sis. viime kilometrin.",
+    (
+        _commute_display(_fastest, _fastest_rush)
+        if pd.notna(_fastest)
+        else "–"
+    ),
+    help=(
+        f"Junalla asemalta {origin_station}, sis. viime kilometrin. Suluissa "
+        "nopein mahdollinen vaihtoyhteys — ruuhka-aamun vaihto voi olla hitaampi."
+    ),
 )
 
 st.divider()
@@ -374,7 +412,7 @@ with tab_map:
             valid_coords = valid_coords.sort_values("dist_km", na_position="last")
         else:
             valid_coords = valid_coords.sort_values(
-                [axis_col, "commute_min"], ascending=[False, True], na_position="last"
+                [axis_col, "commute_min_rush"], ascending=[False, True], na_position="last"
             )
 
         total = len(valid_coords)
@@ -401,8 +439,8 @@ with tab_map:
         page_df["lat"] = page_df["lat"].astype(float) + ((_h % 1000) / 1000.0 - 0.5) * 0.0032
         page_df["lon"] = page_df["lon"].astype(float) + (((_h // 1000) % 1000) / 1000.0 - 0.5) * 0.0064
 
-        page_df["commute_disp"] = page_df["commute_min"].map(
-            lambda v: f"{v:.0f} min" if pd.notna(v) else "–"
+        page_df["commute_disp"] = page_df.apply(
+            lambda r: _commute_display(r["commute_min"], r["commute_min_rush"]), axis=1
         )
         page_df["lead_score"] = page_df[axis_col]
 
@@ -501,7 +539,9 @@ with tab_reach:
     st.caption(
         f"Aikabudjetin sisällä juna­matkalla saavutettavat asemat ({ACCESS_MODE_LABELS[access_mode]} "
         "viime kilometrillä). Varjostettu alue on karkea arvio saavutettavuudesta — "
-        "offline-malli ilman aikatauluja."
+        "offline-malli ilman aikatauluja. Varjennut näyttävät parhaan mahdollisen "
+        "vaihtoyhteyden; harmaa yrityspiste on sellainen, jonka ruuhka-aamun "
+        "vaihto vie budjetin yli."
     )
     reach_budget = st.slider(
         "Aikabudjetti (min)", min_value=15, max_value=120, value=60, step=5, key="reach_budget"
@@ -530,9 +570,10 @@ with tab_reach:
             )
         disk_df = pd.DataFrame(disk_rows)
 
-        # Companies shaded by whether they fall inside the budget.
+        # Companies shaded by whether they fall inside the budget (rush estimate:
+        # a bad morning connection must not count as reaching the budget).
         comp = df.dropna(subset=["lat", "lon"]).copy()
-        comp["in_reach"] = comp["commute_min"].notna() & (comp["commute_min"] <= reach_budget)
+        comp["in_reach"] = comp["commute_min_rush"].notna() & (comp["commute_min_rush"] <= reach_budget)
         comp["pt_color"] = comp["in_reach"].map(
             lambda ok: [0, 170, 90, 170] if ok else [150, 150, 150, 70]
         )
@@ -602,12 +643,19 @@ with tab_table:
             "address"
         ].astype(str).str.contains(search, case=False, na=False)
         source = base[mask].copy()
-        # Always add commute_min (df_raw lacks it), even for an empty result set,
-        # so the column selection below never KeyErrors. Last mile uses road
-        # distance when available.
+        # Always add the commute columns (df_raw lacks them), even for an empty
+        # result set, so the column selection below never KeyErrors. Last mile
+        # uses road distance when available. Both connection qualities are
+        # computed so the table can show the range.
         source["commute_min"] = [
             transit.commute_minutes(
                 s, d, mode=access_mode, rail_minutes=_rail, overhead_min=overhead_min
+            )
+            for s, d in zip(source["nearest_station"], source["dist_km"])
+        ]
+        source["commute_min_rush"] = [
+            transit.commute_minutes(
+                s, d, mode=access_mode, rail_minutes=_rail_rush, overhead_min=overhead_min
             )
             for s, d in zip(source["nearest_station"], source["dist_km"])
         ]
@@ -635,21 +683,25 @@ with tab_table:
             "toi_description",
             "nearest_station",
             "dist_km",
-            "commute_min",
             "address",
             "best_website",
             "registered",
         ]
         + extra_cols
     ].copy()
-    display["commute_min"] = display["commute_min"].round(0).astype("Int64")
+    # Range display: "58 min (nopein 36)" — the commute the user would usually
+    # make, with the timetable-best floor alongside.
+    display.insert(5, "commute_text", [
+        _commute_display(b, r)
+        for b, r in zip(source["commute_min"], source["commute_min_rush"])
+    ])
     base_cols = [
         "Yritys",
         "Toimiala",
         "TOI-kuvaus",
         "Asema",
         "Etäisyys (km)",
-        "Työmatka (min)",
+        "Työmatka",
         "Osoite",
         "Verkkosivut",
         "Perustettu",
@@ -713,10 +765,10 @@ with tab_leads:
         key="leads_show_all",
     )
     if show_all:
-        top = scored.sort_values([axis_col, "commute_min"], ascending=[False, True])
+        top = scored.sort_values([axis_col, "commute_min_rush"], ascending=[False, True])
     else:
         n_leads = st.slider("Näytä top-N", 5, 500, 30, step=5, key="leads_top_n")
-        top = scored.sort_values([axis_col, "commute_min"], ascending=[False, True]).head(
+        top = scored.sort_values([axis_col, "commute_min_rush"], ascending=[False, True]).head(
             n_leads
         )
 
@@ -727,6 +779,7 @@ with tab_leads:
             "nearest_station",
             "dist_km",
             "commute_min",
+            "commute_min_rush",
             "best_website",
             "registered",
             axis_col,
@@ -737,13 +790,17 @@ with tab_leads:
             if c in top.columns
         ]
     ].copy()
-    lead_display["commute_min"] = lead_display["commute_min"].round(0).astype("Int64")
+    lead_display["commute_min"] = [
+        _commute_display(b, r)
+        for b, r in zip(lead_display["commute_min"], lead_display["commute_min_rush"])
+    ]
+    lead_display = lead_display.drop(columns=["commute_min_rush"])
     base_lead_cols = [
         "Yritys",
         "Toimiala (tarkennettu)",
         "Asema",
         "Etäisyys (km)",
-        "Työmatka (min)",
+        "Työmatka",
         "Verkkosivut",
         "Perustettu",
         "Pisteet",
@@ -811,12 +868,12 @@ with tab_fit:
     show_all_fit = st.checkbox("Näytä kaikki", value=False, key="fit_show_all")
     if show_all_fit:
         top_fit = fit_frame.sort_values(
-            [score_col, "commute_min"], ascending=[False, True], na_position="last"
+            [score_col, "commute_min_rush"], ascending=[False, True], na_position="last"
         )
     else:
         n_fit = st.slider("Näytä top-N", 5, 500, 30, step=5, key="fit_top_n")
         top_fit = fit_frame.sort_values(
-            [score_col, "commute_min"], ascending=[False, True], na_position="last"
+            [score_col, "commute_min_rush"], ascending=[False, True], na_position="last"
         ).head(n_fit)
 
     # Aiemmat palautemerkit (paikallinen sqlite) -> Palaute-sarakkeen alkuarvot.
@@ -834,18 +891,19 @@ with tab_fit:
 
     fit_cols = [
         "business_id", "name", "toi_description", "nearest_station",
-        "dist_km", "commute_min", "best_website", "registered",
+        "dist_km", "commute_min", "commute_min_rush", "best_website", "registered",
         "e_industry", "e_hiring", "e_commute", score_col,
     ]
     fit_display = top_fit[fit_cols].copy()
     fit_display["Palaute"] = (
         fit_display["business_id"].astype(str).map(labels_by_id).fillna("")
     )
-    fit_display["commute_min"] = (
-        pd.to_numeric(fit_display["commute_min"], errors="coerce")
-        .round(0)
-        .astype("Int64")
-    )
+    # Range display replaces the numeric minute column: "58 min (nopein 36)".
+    fit_display["commute_min"] = [
+        _commute_display(b, r)
+        for b, r in zip(fit_display["commute_min"], fit_display["commute_min_rush"])
+    ]
+    fit_display = fit_display.drop(columns=["commute_min_rush"])
 
     _score_config = (
         st.column_config.ProgressColumn(
@@ -863,7 +921,7 @@ with tab_fit:
             "toi_description": "Toimiala (tarkennettu)",
             "nearest_station": "Asema",
             "dist_km": st.column_config.NumberColumn("Etäisyys (km)", format="%.2f km"),
-            "commute_min": st.column_config.NumberColumn("Työmatka (min)", format="%.0f"),
+            "commute_min": "Työmatka",
             "best_website": st.column_config.LinkColumn("Verkkosivut"),
             "registered": "Perustettu",
             "e_industry": st.column_config.NumberColumn("Alan pisteet", format="%.0f"),

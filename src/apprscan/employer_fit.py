@@ -37,9 +37,12 @@ INDUSTRY_FIT = {
 }
 
 # Door-to-door commute bands in minutes: <=35 -> 3, <=50 -> 2, <=70 -> 1, else 0.
+# Scored on the rush-hour (typical morning) commute, not the best-case floor:
+# a Järvenpää employer is a ~58 min door-to-station trip on a 6-7 o'clock
+# departure, not the ~36 min the timetable promises from 9 o'clock onwards.
 # With the dashboard defaults (bus last mile, +10 min overhead) this yields
-# roughly: Kerava ~31 -> 3, Järvenpää ~37 -> 2, Pasila ~46 -> 2,
-# Hyvinkää ~52 -> 1, Riihimäki ~60 -> 1, Helsinki ~55+ -> 1.
+# roughly: Kerava ~31 -> 3, Helsinki ~44 -> 3, Pasila ~40 -> 2-3,
+# Järvenpää ~59 -> 1, Hyvinkää ~74 -> 0, Riihimäki ~93 -> 0.
 COMMUTE_BANDS_MIN = (35.0, 50.0, 70.0)
 
 EMPLOYER_AXES = {"Alan sopivuus": "e_industry", "Rekrytointi": "e_hiring", "Työmatka": "e_commute"}
@@ -89,12 +92,19 @@ def add_employer_scores(
     mode: str = "bus",
     overhead_min: float = 10.0,
     rail_minutes: Optional[dict] = None,
+    rail_minutes_rush: Optional[dict] = None,
 ) -> pd.DataFrame:
     """Add e_industry / e_hiring / e_commute / e_fit (0-10) to a frame.
 
-    If the frame already carries a ``commute_min`` column (the dashboard
+    If the frame already carries a ``commute_min_rush`` column (the dashboard
     computes one from the sidebar's origin/mode/overhead), it is used as-is;
-    otherwise commute is computed here with the given defaults.
+    otherwise commute is computed here with the given defaults. ``e_commute``
+    is scored on the rush-hour commute — the typical morning connection —
+    because that is the trip the job seeker would actually make. ``commute_min``
+    (best case) is still written for display alongside it.
+
+    ``rail_minutes`` / ``rail_minutes_rush`` allow callers to reuse precomputed
+    ``transit.rail_minutes_from`` dicts (one per connection quality).
     """
     out = frame.copy()
     out["e_industry"] = out["toi_code"].apply(industry_score)
@@ -106,24 +116,33 @@ def add_employer_scores(
         axis=1,
     )
 
-    if "commute_min" in out.columns:
+    if "commute_min_rush" in out.columns:
+        minutes = out["commute_min_rush"]
+    elif "commute_min" in out.columns:
         minutes = out["commute_min"]
     else:
         rail = rail_minutes if rail_minutes is not None else transit.rail_minutes_from(origin)
+        rail_rush = (
+            rail_minutes_rush
+            if rail_minutes_rush is not None
+            else transit.rail_minutes_from(origin, connection="rush")
+        )
 
-        def _minutes(row) -> float:
+        def _minutes(row, rail_map) -> float:
             distance = row["dist_km"] if "dist_km" in out.columns else row.get("distance_km")
             value = transit.commute_minutes(
                 row["nearest_station"],
                 distance,
                 origin=origin,
                 mode=mode,
-                rail_minutes=rail,
+                rail_minutes=rail_map,
                 overhead_min=overhead_min,
             )
             return value if value is not None else float("nan")
 
-        minutes = out.apply(_minutes, axis=1)
+        out["commute_min"] = out.apply(_minutes, rail_map=rail, axis=1)
+        out["commute_min_rush"] = out.apply(_minutes, rail_map=rail_rush, axis=1)
+        minutes = out["commute_min_rush"]
 
     out["e_commute"] = minutes.apply(commute_score)
     out["e_fit"] = out["e_industry"] + out["e_hiring"] + out["e_commute"]
