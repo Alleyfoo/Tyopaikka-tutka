@@ -3,9 +3,13 @@
 A small, fully self-contained rail network: station coordinates and line
 topology are embedded as module constants, so this works on Streamlit Cloud
 with zero file or network IO. Segment travel times are *synthesised* from
-geometry (great-circle distance / line speed + per-stop dwell) rather than read
-from a timetable, then calibrated against a few known journeys (see
-``tests/test_transit.py``).
+geometry (great-circle distance / line speed + per-stop dwell) unless a line
+carries explicit ``segment_min`` timetable values, and are calibrated against
+known real journeys (see ``tests/test_transit.py``).
+
+Line changes (e.g. Mäntsälä -> Järvenpää means leaving the oikorata train
+at Kerava and boarding a päärata train) add a fixed :data:`TRANSFER_MIN`
+surcharge, so routed times include the mandatory connection wait.
 
 The public surface is deliberately small so a real schedule-based backend
 (e.g. Digitransit / OpenTripPlanner) could later replace the internals without
@@ -34,17 +38,31 @@ ACCESS_SPEEDS_KMH: Dict[str, float] = {
 }
 
 # Dwell time added per intermediate stop (minutes). Accounts for braking,
-# stopping and re-accelerating; folded into each edge.
+# stopping and re-accelerating; folded into each synthesised edge.
 DWELL_MIN = 0.7
+
+# Surcharge when the shortest path switches lines at a shared station — the
+# real journey means stepping off one train and waiting for the next.
+# Calibrated on the Mäntsälä -> Riihimäki connection: Z to Kerava + change +
+# R onwards is ~62 min door-to-station (verified against the timetable).
+TRANSFER_MIN = 5.0
 
 
 @dataclass(frozen=True)
 class Line:
-    """An ordered run of stations sharing an effective line speed (km/h)."""
+    """An ordered run of stations sharing an effective line speed (km/h).
+
+    ``segment_min`` optionally carries explicit timetable minutes per gap
+    (one entry per adjacent station pair). ``None`` entries fall back to
+    synthesising the gap from geometry at the line speed. Use these where
+    straight-line geometry badly underestimates the real track (e.g. the
+    curving Hyvinkää -> Riihimäki section) so calibration stays anchored.
+    """
 
     name: str
     speed_kmh: float
     stations: Tuple[str, ...]
+    segment_min: Optional[Tuple[Optional[float], ...]] = None
 
 
 # Station coordinates (WGS84). Only the stops relevant to a Mäntsälä commute.
@@ -66,14 +84,30 @@ STATION_COORDS: Dict[str, Tuple[float, float]] = {
 
 # Effective line speeds are calibrated, not nominal track speeds: the dense
 # Helsinki–Kerava section is slow despite high track limits, while the Kerava–
-# Lahti direct line (oikorata) is genuinely fast.
+# Lahti direct line (oikorata) is genuinely fast. The Kerava–Riihimäki gaps use
+# explicit R-train timetable minutes (geometry underestimates the curving
+# track by ~20% there and the synthesised 90 km/h was far too optimistic).
+# Verified against the real timetable 2026-10: Mäntsälä -> Järvenpää ~36 min,
+# Mäntsälä -> Riihimäki ~1 h 02 via the R train from Kerava.
 RAIL_LINES: Tuple[Line, ...] = (
-    Line("Päärata (Helsinki–Kerava)", 72.0, ("Helsinki", "Pasila", "Tikkurila", "Savio", "Kerava")),
-    Line("Päärata (Kerava–Riihimäki)", 90.0, ("Kerava", "Järvenpää", "Hyvinkää", "Riihimäki")),
+    Line(
+        "Päärata (Helsinki–Riihimäki)",
+        72.0,
+        ("Helsinki", "Pasila", "Tikkurila", "Savio", "Kerava", "Järvenpää", "Hyvinkää", "Riihimäki"),
+        segment_min=(None, None, None, None, 8.0, 15.0, 19.0),
+    ),
     Line("Oikorata (Kerava–Lahti)", 120.0, ("Kerava", "Haarajoki", "Mäntsälä", "Henna", "Lahti")),
     Line("Lahti–Riihimäki", 95.0, ("Lahti", "Riihimäki")),
     Line("Lahti–Kouvola", 110.0, ("Lahti", "Kouvola")),
 )
+
+
+def _edge_minutes(line: Line, i: int) -> float:
+    """Minutes for gap ``i`` of ``line``: timetable value or synthesised."""
+    if line.segment_min is not None and line.segment_min[i] is not None:
+        return float(line.segment_min[i])
+    a, b = line.stations[i], line.stations[i + 1]
+    return _segment_minutes(a, b, line.speed_kmh)
 
 
 def _segment_minutes(a: str, b: str, speed_kmh: float) -> float:
@@ -94,10 +128,30 @@ def build_graph(
     """
     adj: Dict[str, List[Tuple[str, float]]] = {name: [] for name in STATION_COORDS}
     for line in lines:
-        for a, b in zip(line.stations, line.stations[1:]):
-            minutes = _segment_minutes(a, b, line.speed_kmh)
+        for i in range(len(line.stations) - 1):
+            a, b = line.stations[i], line.stations[i + 1]
+            minutes = _edge_minutes(line, i)
             adj[a].append((b, minutes))
             adj[b].append((a, minutes))
+    return adj
+
+
+def _line_adjacency(
+    lines: Tuple[Line, ...],
+) -> Dict[str, List[Tuple[str, float, int]]]:
+    """Line-tagged adjacency {station: [(neighbour, minutes, line_index)]}.
+
+    ``build_graph`` merges lines at shared stations, which loses the identity
+    of the train a leg runs on; the router needs it to know when a path
+    changes trains and must pay :data:`TRANSFER_MIN`.
+    """
+    adj: Dict[str, List[Tuple[str, float, int]]] = {name: [] for name in STATION_COORDS}
+    for idx, line in enumerate(lines):
+        for i in range(len(line.stations) - 1):
+            a, b = line.stations[i], line.stations[i + 1]
+            minutes = _edge_minutes(line, i)
+            adj[a].append((b, minutes, idx))
+            adj[b].append((a, minutes, idx))
     return adj
 
 
@@ -105,22 +159,38 @@ def rail_minutes_from(
     origin: str = DEFAULT_ORIGIN,
     lines: Tuple[Line, ...] = RAIL_LINES,
 ) -> Dict[str, float]:
-    """Shortest train-only minutes from ``origin`` to every reachable station."""
+    """Shortest train-only minutes from ``origin`` to every reachable station.
+
+    Dijkstra runs over ``(station, line)`` states: boarding the first train is
+    free, but every later line change costs :data:`TRANSFER_MIN` on top of the
+    edge, so journeys that need a change of trains (Mäntsälä -> Järvenpää
+    changes at Kerava; Mäntsälä -> Kouvola changes at Lahti) are not priced
+    as zero-cost connections. Through services that stay on one line
+    (Helsinki -> Riihimäki on the merged päärata) pay nothing.
+    """
     if origin not in STATION_COORDS:
         raise KeyError(f"Unknown origin station: {origin!r}")
-    adj = build_graph(lines)
-    best: Dict[str, float] = {origin: 0.0}
-    heap: List[Tuple[float, str]] = [(0.0, origin)]
+    adj = _line_adjacency(lines)
+    BOARDING = -1  # pseudo-line of the origin state: boarding costs nothing
+    best: Dict[Tuple[str, int], float] = {(origin, BOARDING): 0.0}
+    heap: List[Tuple[float, str, int]] = [(0.0, origin, BOARDING)]
+    out: Dict[str, float] = {}
     while heap:
-        cost, node = heapq.heappop(heap)
-        if cost > best.get(node, float("inf")):
+        cost, node, li = heapq.heappop(heap)
+        if cost > best.get((node, li), float("inf")):
             continue
-        for nbr, w in adj[node]:
-            nxt = cost + w
-            if nxt < best.get(nbr, float("inf")):
-                best[nbr] = nxt
-                heapq.heappush(heap, (nxt, nbr))
-    return best
+        # States pop in increasing cost, so the first visit of a station is
+        # its shortest rail time regardless of which line arrived.
+        if node in out:
+            continue
+        out[node] = cost
+        for nbr, w, lj in adj[node]:
+            transfer = TRANSFER_MIN if li not in (BOARDING, lj) else 0.0
+            nxt = cost + w + transfer
+            if nxt < best.get((nbr, lj), float("inf")):
+                best[(nbr, lj)] = nxt
+                heapq.heappush(heap, (nxt, nbr, lj))
+    return out
 
 
 def access_minutes(distance_km: float, mode: str = "walk") -> float:
