@@ -60,6 +60,7 @@ st.set_page_config(
 )
 
 DATA_PATH = Path(__file__).parent / "out" / "companies.csv"
+WEBSHOPS_PATH = Path(__file__).parent / "out" / "webshops.csv"
 
 # Coordinates come from apprscan.transit (single source of truth — the real
 # railway stations), so map markers, distance, and the rail model all agree.
@@ -143,6 +144,39 @@ def load_data(_mtime: float) -> pd.DataFrame:
         df["best_website"] = df["website"]
     df["color"] = df["industry"].map(lambda x: INDUSTRY_COLORS.get(x, [160, 160, 160]))
     return df
+
+
+@st.cache_data(show_spinner=False)
+def load_webshops(_mtime: float) -> pd.DataFrame:
+    """out/webshops.csv: every live retail/wholesale company with its shop probe.
+
+    Written by scripts/find_webshops.py — carries all companies.csv columns
+    plus shop_* probe columns and _host. Same distance/website fixes as
+    load_data so commute math works here too.
+    """
+    shops = pd.read_csv(WEBSHOPS_PATH, encoding="utf-8-sig")
+    for col in ("shop_catalog_estimate", "shop_score", "shop_sitemap_products",
+                "shop_homepage_product_links"):
+        if col in shops.columns:
+            shops[col] = pd.to_numeric(shops[col], errors="coerce")
+    shops["shop_catalog_estimate"] = shops["shop_catalog_estimate"].fillna(0).astype(int)
+    shops["shop_score"] = shops["shop_score"].fillna(0).astype(int)
+    if "road_distance_km" in shops.columns:
+        shops["dist_km"] = (
+            pd.to_numeric(shops["road_distance_km"], errors="coerce")
+            .round(2)
+            .fillna(pd.to_numeric(shops["distance_km"], errors="coerce").round(2))
+        )
+    else:
+        shops["dist_km"] = pd.to_numeric(shops["distance_km"], errors="coerce").round(2)
+    shops["registered"] = pd.to_numeric(
+        shops["registered"].astype(str).str[:4], errors="coerce"
+    )
+    if "found_website" in shops.columns:
+        shops["best_website"] = shops["website"].combine_first(shops["found_website"])
+    else:
+        shops["best_website"] = shops["website"]
+    return shops
 
 
 # ---------------------------------------------------------------------------
@@ -381,8 +415,8 @@ col5.metric(
 st.divider()
 
 # ---- Map ----------------------------------------------------------------
-tab_map, tab_reach, tab_table, tab_stats, tab_leads, tab_fit = st.tabs(
-    ["🗺️ Kartta", "🚆 Junasaavutettavuus", "📋 Yritykset", "📊 Tilastot", "🎯 Liidit", "💼 Työnantajasopivuus"]
+tab_map, tab_reach, tab_table, tab_shops, tab_stats, tab_leads, tab_fit = st.tabs(
+    ["🗺️ Kartta", "🚆 Junasaavutettavuus", "📋 Yritykset", "🛒 Verkkokaupat", "📊 Tilastot", "🎯 Liidit", "💼 Työnantajasopivuus"]
 )
 
 with tab_map:
@@ -734,6 +768,152 @@ with tab_table:
         file_name="tyonantajat.csv",
         mime="text/csv",
     )
+
+# ---- Webshops tab (catalog-heavy shops found by find_webshops.py) ---------
+with tab_shops:
+    st.subheader("🛒 Verkkokaupat — kenellä on iso tuotekatalogi verkossa?")
+    st.caption(
+        "Jokaisen elossa olevan vähittäis- ja tukkukaupan sivusto on kuitattu: "
+        "verkkokauppa-alusta, ostoskorisignaali ja tuote-URL:ien määrä sivukartasta "
+        "(scripts/find_webshops.py). Arvio katalogin koosta = tuotesivujen määrä, "
+        "ei liikevaihtoa — pieni boutique ja Bygghemma-tyylinen katalogikauppa "
+        "erottuvat nyt toisistaan."
+    )
+    if not WEBSHOPS_PATH.exists():
+        st.info(
+            "out/webshops.csv puuttuu — aja `python scripts/find_webshops.py` "
+            "paikallisesti päivittääksesi verkkokauppalistan."
+        )
+    else:
+        shops = load_webshops(WEBSHOPS_PATH.stat().st_mtime)
+
+        col_f1, col_f2 = st.columns(2)
+        with col_f1:
+            min_products = st.slider(
+                "Vähintään tuotteita (arvio)", 0, 5000, 20, step=10,
+                key="shop_min_products",
+                help="Alaraja katalogin koolle. 0 = myös pienet verkkokaupat.",
+            )
+        with col_f2:
+            segment = st.radio(
+                "Segmentti",
+                ("Kaikki", "Vähittäiskauppa", "Tukkukauppa"),
+                horizontal=True,
+                key="shop_segment",
+            )
+
+        shop_station_options = sorted(shops["nearest_station"].dropna().unique())
+        col_f3, col_f4 = st.columns(2)
+        with col_f3:
+            shop_stations = st.multiselect(
+                "Asemat",
+                options=shop_station_options,
+                default=shop_station_options,
+                format_func=lambda s: STATION_INFO.get(s, {"label": s})["label"],
+                key="shop_stations",
+            )
+        with col_f4:
+            one_per_site = st.toggle(
+                "Yksi kauppa per verkkotunnus",
+                value=True,
+                key="shop_dedupe",
+                help="Ketjut (esim. monta K-Rauta-yhtiötä samalla sivustolla) "
+                     "näkyvät vain kerran. Poista päältä nähdäksesi kaikki.",
+            )
+
+        sel = shops[shops["shop_catalog_estimate"] >= min_products].copy()
+        if segment == "Vähittäiskauppa":
+            sel = sel[sel["toi_code"].astype(str).str.startswith("47", na=False)]
+        elif segment == "Tukkukauppa":
+            sel = sel[sel["toi_code"].astype(str).str.startswith("46", na=False)]
+        if shop_stations:
+            sel = sel[sel["nearest_station"].isin(shop_stations)]
+
+        # Sort once: catalog first, score as tiebreak — then optionally keep only
+        # the biggest shop per host (chains share one webstore).
+        sel = sel.sort_values(
+            ["shop_catalog_estimate", "shop_score"], ascending=False
+        )
+        if one_per_site and "_host" in sel.columns:
+            sel = sel.drop_duplicates(subset="_host", keep="first")
+
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Verkkokaupat", f"{len(sel)} kpl")
+        if sel.empty:
+            m2.metric("Suurin katalogi", "–")
+            m3.metric("Mediaani", "–")
+        else:
+            m2.metric("Suurin katalogi", f"{int(sel['shop_catalog_estimate'].max()):,} tuotetta".replace(",", " "))
+            m3.metric("Mediaani", f"{int(sel['shop_catalog_estimate'].median())} tuotetta")
+
+        show_all = st.checkbox("Näytä kaikki", value=False, key="shops_show_all")
+        if show_all:
+            shown = sel
+        else:
+            n_shops = st.slider(
+                "Näytä top-N", 10, 300, 50, step=10, key="shops_top_n"
+            )
+            shown = sel.head(n_shops)
+
+        if shown.empty:
+            st.info("Ei verkkokauppoja valituilla suodattimilla.")
+        else:
+            shown = shown.copy()
+            # Commute range from the user's home station, same model as elsewhere.
+            shown["commute_text"] = [
+                _commute_display(
+                    transit.commute_minutes(
+                        s, d, mode=access_mode, rail_minutes=_rail,
+                        overhead_min=overhead_min,
+                    ),
+                    transit.commute_minutes(
+                        s, d, mode=access_mode, rail_minutes=_rail_rush,
+                        overhead_min=overhead_min,
+                    ),
+                )
+                for s, d in zip(shown["nearest_station"], shown["dist_km"])
+            ]
+            sells = shown["llm_sells"] if "llm_sells" in shown.columns else shown["toi_description"]
+            shop_display = pd.DataFrame(
+                {
+                    "Yritys": shown["name"],
+                    "Asema": shown["nearest_station"].map(
+                        lambda s: STATION_INFO.get(s, {"label": s})["label"]
+                    ),
+                    "Työmatka": shown["commute_text"],
+                    "Tuotteita": shown["shop_catalog_estimate"],
+                    "Alusta": shown["shop_platform"].fillna("–"),
+                    "Myy": sells.fillna(shown["toi_description"]),
+                    "Pisteet": shown["shop_score"],
+                    "Verkkosivut": shown["best_website"],
+                    "Perustettu": shown["registered"].astype("Int64"),
+                }
+            )
+            st.dataframe(
+                shop_display.reset_index(drop=True),
+                width="stretch",
+                column_config={
+                    "Verkkosivut": st.column_config.LinkColumn("Verkkosivut"),
+                    "Tuotteita": st.column_config.NumberColumn(
+                        "Tuotteita", format="%d kpl"
+                    ),
+                    "Pisteet": st.column_config.ProgressColumn(
+                        "Pisteet", min_value=0, max_value=9, format="%d"
+                    ),
+                },
+                height=500,
+            )
+            csv_shops = sel.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+            st.download_button(
+                "⬇️ Lataa verkkokaupat CSV (koko suodatettu lista)",
+                data=csv_shops,
+                file_name="verkkokaupat.csv",
+                mime="text/csv",
+            )
+            st.caption(
+                f"Näytetään {len(shown)}/{len(sel)} — lista vie suodattimet "
+                "mukaan, ja ‘Näytä kaikki’ tuo koko listan ruudulle."
+            )
 
 # ---- Leads tab (scoring helpers are defined near the top of the file) ----
 with tab_leads:

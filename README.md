@@ -30,6 +30,12 @@ The **Junasaavutettavuus** (train reach) tab shows the area reachable from your
 home station within a time budget: green disks are the reachable station areas
 and green dots are employers inside the budget.
 
+The **Verkkokaupat** (webshops) tab lists the retail/wholesale companies that
+actually run a webshop — with a catalog-size estimate from product URLs in the
+sitemap, detected e-commerce platform, and a shop score (see pipeline step 4d).
+Filter by minimum catalog size, segment, and station, and view the full list,
+not just the top finds.
+
 ![Train reach isochrone from Mäntsälä](docs/img/dashboard-reach.png)
 
 The commute estimate is a self-contained, offline model (`src/apprscan/transit.py`):
