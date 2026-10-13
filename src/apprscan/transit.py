@@ -8,8 +8,11 @@ carries explicit ``segment_min`` timetable values, and are calibrated against
 known real journeys (see ``tests/test_transit.py``).
 
 Line changes (e.g. Mäntsälä -> Järvenpää means leaving the oikorata train
-at Kerava and boarding a päärata train) add a fixed :data:`TRANSFER_MIN`
-surcharge, so routed times include the mandatory connection wait.
+at Kerava and boarding a päärata train) add a fixed transfer surcharge,
+so routed times include the mandatory connection wait. Two connection
+qualities are available: ``connection="best"`` (tightest possible) and
+``connection="rush"`` (typical morning-rush wait) — the difference between
+them is the commute-time variance the timetable's connection quality adds.
 
 The public surface is deliberately small so a real schedule-based backend
 (e.g. Digitransit / OpenTripPlanner) could later replace the internals without
@@ -46,6 +49,15 @@ DWELL_MIN = 0.7
 # Calibrated on the Mäntsälä -> Riihimäki connection: Z to Kerava + change +
 # R onwards is ~62 min door-to-station (verified against the timetable).
 TRANSFER_MIN = 5.0
+
+# The same connection on a morning-rush departure. The timetable pairs some
+# departures badly (e.g. Mäntsälä -> Järvenpää: 6–7 o'clock departures are
+# ~58 min door-to-station, from 9 o'clock only ~36 min) because the wait for
+# the connecting train at Kerava dominates. ``connection="rush"`` prices that
+# typical morning wait; ``connection="best"`` keeps the tightest possible
+# connection. Calibrated so that rush Järvenpää + the dashboard's default
+# 10 min overhead ≈ the observed 58 min.
+TRANSFER_RUSH_MIN = 25.0
 
 
 @dataclass(frozen=True)
@@ -95,6 +107,19 @@ RAIL_LINES: Tuple[Line, ...] = (
         72.0,
         ("Helsinki", "Pasila", "Tikkurila", "Savio", "Kerava", "Järvenpää", "Hyvinkää", "Riihimäki"),
         segment_min=(None, None, None, None, 8.0, 15.0, 19.0),
+    ),
+    # The Z runs Lahti -> Helsinki *through* Kerava on one train, so journeys
+    # towards Helsinki must not pay a transfer surcharge. Without this line the
+    # router would charge the (rush: heavy) Kerava connection for a ride the
+    # commuter never leaves. Kerava -> Helsinki gaps are explicit timetable
+    # minutes; the oikorata gaps synthesise at the same 120 km/h as the line
+    # below, so the two representations agree. One entry per adjacent pair:
+    # Kerava->Tikkurila 7, Tikkurila->Pasila 8, Pasila->Helsinki 4.
+    Line(
+        "Z-juna (Lahti–Helsinki)",
+        120.0,
+        ("Lahti", "Henna", "Mäntsälä", "Haarajoki", "Kerava", "Tikkurila", "Pasila", "Helsinki"),
+        segment_min=(None, None, None, None, 7.0, 8.0, 4.0),
     ),
     Line("Oikorata (Kerava–Lahti)", 120.0, ("Kerava", "Haarajoki", "Mäntsälä", "Henna", "Lahti")),
     Line("Lahti–Riihimäki", 95.0, ("Lahti", "Riihimäki")),
@@ -158,18 +183,33 @@ def _line_adjacency(
 def rail_minutes_from(
     origin: str = DEFAULT_ORIGIN,
     lines: Tuple[Line, ...] = RAIL_LINES,
+    connection: str = "best",
 ) -> Dict[str, float]:
     """Shortest train-only minutes from ``origin`` to every reachable station.
 
     Dijkstra runs over ``(station, line)`` states: boarding the first train is
-    free, but every later line change costs :data:`TRANSFER_MIN` on top of the
+    free, but every later line change costs a transfer surcharge on top of the
     edge, so journeys that need a change of trains (Mäntsälä -> Järvenpää
     changes at Kerava; Mäntsälä -> Kouvola changes at Lahti) are not priced
     as zero-cost connections. Through services that stay on one line
-    (Helsinki -> Riihimäki on the merged päärata) pay nothing.
+    (Helsinki -> Riihimäki on the merged päärata, or Mäntsälä -> Helsinki on
+    the Z) pay nothing.
+
+    ``connection`` picks the transfer surcharge:
+
+    * ``"best"``  — tightest possible connection (:data:`TRANSFER_MIN`);
+    * ``"rush"``  — the typical morning-rush connection wait
+      (:data:`TRANSFER_RUSH_MIN`), so the range between the two tells how
+      much the timetable's connection quality can add to a commute.
     """
     if origin not in STATION_COORDS:
         raise KeyError(f"Unknown origin station: {origin!r}")
+    if connection == "best":
+        transfer_cost = TRANSFER_MIN
+    elif connection == "rush":
+        transfer_cost = TRANSFER_RUSH_MIN
+    else:
+        raise ValueError(f"Unknown connection mode: {connection!r} (use 'best' or 'rush')")
     adj = _line_adjacency(lines)
     BOARDING = -1  # pseudo-line of the origin state: boarding costs nothing
     best: Dict[Tuple[str, int], float] = {(origin, BOARDING): 0.0}
@@ -180,12 +220,15 @@ def rail_minutes_from(
         if cost > best.get((node, li), float("inf")):
             continue
         # States pop in increasing cost, so the first visit of a station is
-        # its shortest rail time regardless of which line arrived.
-        if node in out:
-            continue
-        out[node] = cost
+        # its shortest rail time regardless of which line arrived. The state
+        # must still expand, though: a slightly costlier arrival on another
+        # line (e.g. the Z at Pasila when the päärata got there first) may be
+        # the only way to continue without paying a transfer, and dropping it
+        # would lose through-service routes.
+        if node not in out:
+            out[node] = cost
         for nbr, w, lj in adj[node]:
-            transfer = TRANSFER_MIN if li not in (BOARDING, lj) else 0.0
+            transfer = transfer_cost if li not in (BOARDING, lj) else 0.0
             nxt = cost + w + transfer
             if nxt < best.get((nbr, lj), float("inf")):
                 best[(nbr, lj)] = nxt

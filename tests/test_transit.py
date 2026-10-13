@@ -30,8 +30,11 @@ def test_rail_minutes_reaches_every_station():
 
 def test_mantsala_to_helsinki_realistic():
     rail = transit.rail_minutes_from("Mäntsälä")
-    # Real Z-train commute is ~45-50 min; allow a calibrated band.
-    assert 38.0 <= rail["Helsinki"] <= 52.0
+    # The Z runs Mäntsälä -> Helsinki through Kerava on one train (~19 min
+    # Kerava -> Helsinki per timetable), so no transfer surcharge applies.
+    # Web-verified door-to-station total is ~39-42 min; the rail-only floor
+    # sits just below it.
+    assert 28.0 <= rail["Helsinki"] <= 42.0
 
 
 def test_mantsala_to_lahti_realistic():
@@ -70,6 +73,44 @@ def test_mantsala_to_jarvenpaa_via_kerava():
     assert 26.0 <= rail["Järvenpää"] <= 36.0
 
 
+def test_mantsala_to_jarvenpaa_rush_connection():
+    # User-observed: 6-7 o'clock departures are ~58 min door-to-station while
+    # departures from 9 o'clock are only ~36 min — the Kerava connection wait
+    # dominates the difference. The rush model must land in that band once the
+    # dashboard's default 10 min overhead is added (48.6 + 10 ≈ 58.6).
+    best = transit.rail_minutes_from("Mäntsälä")
+    rush = transit.rail_minutes_from("Mäntsälä", connection="rush")
+    assert 40.0 <= rush["Järvenpää"] <= 58.0
+    assert math.isclose(
+        rush["Järvenpää"] - best["Järvenpää"],
+        transit.TRANSFER_RUSH_MIN - transit.TRANSFER_MIN,
+    )
+
+
+def test_single_train_destinations_have_no_rush_penalty():
+    # Destinations reachable on one train from Mäntsälä (oikorata towards
+    # Lahti, Z towards Helsinki) have no connection at all, so rush == best.
+    best = transit.rail_minutes_from("Mäntsälä")
+    rush = transit.rail_minutes_from("Mäntsälä", connection="rush")
+    for station in ("Kerava", "Haarajoki", "Henna", "Lahti", "Tikkurila", "Pasila", "Helsinki"):
+        assert math.isclose(rush[station], best[station])
+
+
+def test_rush_riihimaki_bands():
+    # Riihimäki needs the Kerava change for both connection qualities; the
+    # rush estimate (~82.6 rail) must stay meaningfully above the user-verified
+    # best case (~62.6) but not exceed an hour and a half.
+    best = transit.rail_minutes_from("Mäntsälä")
+    rush = transit.rail_minutes_from("Mäntsälä", connection="rush")
+    assert 70.0 <= rush["Riihimäki"] <= 92.0
+    assert rush["Riihimäki"] > best["Riihimäki"]
+
+
+def test_rush_mode_rejects_unknown_connection():
+    with pytest.raises(ValueError):
+        transit.rail_minutes_from("Mäntsälä", connection="whenever")
+
+
 def test_mantsala_to_hyvinkaa_via_kerava():
     rail = transit.rail_minutes_from("Mäntsälä")
     assert 38.0 <= rail["Hyvinkää"] <= 50.0
@@ -103,21 +144,28 @@ def test_transfer_surcharge_at_kerava():
 
 
 def test_through_service_pays_no_transfer():
-    # The merged päärata runs Helsinki -> Riihimäki through Kerava without
-    # a change of trains, so the routed time equals the pure edge sum.
-    rail = transit.rail_minutes_from("Helsinki")
-    adj = transit.build_graph()
-    hops = [
-        ("Helsinki", "Pasila"),
-        ("Pasila", "Tikkurila"),
-        ("Tikkurila", "Savio"),
-        ("Savio", "Kerava"),
-        ("Kerava", "Järvenpää"),
-        ("Järvenpää", "Hyvinkää"),
-        ("Hyvinkää", "Riihimäki"),
-    ]
-    direct = sum(dict(adj[a])[b] for a, b in hops)
-    assert math.isclose(rail["Riihimäki"], direct)
+    # Mäntsälä -> Helsinki is a single Z train: the routed time must equal the
+    # pure Z edge sum (synthesised oikorata gaps + explicit Kerava->Helsinki
+    # timetable minutes) with no transfer surcharge.
+    rail = transit.rail_minutes_from("Mäntsälä")
+    z = next(l for l in transit.RAIL_LINES if l.name.startswith("Z-juna"))
+    adj_z = transit.build_graph((z,))
+    z_ride = sum(
+        dict(adj_z[a])[b] for a, b in zip(z.stations[2:-1], z.stations[3:])
+    )
+    assert math.isclose(rail["Helsinki"], z_ride)
+    # Helsinki -> Riihimäki: the fastest journey rides the same Z to Kerava
+    # and changes to the R — exactly one transfer surcharge on top of the
+    # two lines' edge sums, never the päärata through-ride penalty on top.
+    paarata = next(l for l in transit.RAIL_LINES if l.name.startswith("Päärata"))
+    adj_p = transit.build_graph((paarata,))
+    z_to_kerava = sum(dict(adj_z[a])[b] for a, b in zip(z.stations[-4:-1], z.stations[-3:]))
+    r_ride = sum(
+        dict(adj_p[a])[b]
+        for a, b in [("Kerava", "Järvenpää"), ("Järvenpää", "Hyvinkää"), ("Hyvinkää", "Riihimäki")]
+    )
+    from_hki = transit.rail_minutes_from("Helsinki")
+    assert math.isclose(from_hki["Riihimäki"], z_to_kerava + transit.TRANSFER_MIN + r_ride)
 
 
 def test_unknown_origin_raises():
