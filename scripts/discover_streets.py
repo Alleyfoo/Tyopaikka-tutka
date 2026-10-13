@@ -34,6 +34,10 @@ STATIONS = [
     {"label": "Järvenpää", "lat": 60.4733, "lon": 25.0903, "municipality": "Järvenpää"},
     {"label": "Hyvinkää", "lat": 60.6310, "lon": 24.8590, "municipality": "Hyvinkää"},
     {"label": "Riihimäki", "lat": 60.7186, "lon": 24.7740, "municipality": "Riihimäki"},
+    # Oikorata stations between Kerava and Mäntsälä/Lahti — small, mostly
+    # residential areas around otherwise rural stations.
+    {"label": "Haarajoki", "lat": 60.5363, "lon": 25.1198, "municipality": "Järvenpää"},
+    {"label": "Henna", "lat": 60.7284, "lon": 25.5270, "municipality": "Mäntsälä"},
 ]
 
 
@@ -80,11 +84,41 @@ def main() -> None:
         help="Search radius in metres (default: 1500)",
     )
     parser.add_argument("--out", default=None, help="Optional JSON output file path")
+    parser.add_argument(
+        "--only",
+        nargs="*",
+        default=None,
+        metavar="LABEL",
+        help=(
+            "Only discover these area labels. With --out pointing at an existing "
+            "file, the other areas are kept as-is instead of being overwritten "
+            "(no Overpass queries are made for them)."
+        ),
+    )
     args = parser.parse_args()
+
+    # With --only, keep the untouched areas from an existing output file so a
+    # partial refresh doesn't blank the rest of the config.
+    existing: list[dict[str, Any]] = []
+    if args.only is not None and args.out:
+        import pathlib
+
+        out_path = pathlib.Path(args.out)
+        if out_path.exists():
+            existing = [
+                r
+                for r in json.loads(out_path.read_text(encoding="utf-8"))
+                if r["label"] not in set(args.only)
+            ]
+            print(f"Keeping {len(existing)} existing areas from {args.out}")
+
+    targets = [st for st in STATIONS if args.only is None or st["label"] in set(args.only)]
+    if not targets:
+        raise SystemExit(f"No station matches --only {args.only}")
 
     results: list[dict[str, Any]] = []
 
-    for i, st in enumerate(STATIONS):
+    for i, st in enumerate(targets):
         if i > 0:
             time.sleep(2)  # be polite to Overpass servers
 
@@ -118,8 +152,9 @@ def main() -> None:
         import pathlib
 
         pathlib.Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+        merged = existing + results
         pathlib.Path(args.out).write_text(
-            json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8"
+            json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8"
         )
         print(f"\nSaved to {args.out}")
     else:
