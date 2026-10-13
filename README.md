@@ -152,8 +152,9 @@ catalog?" — the Bygghemma / Puolenkuun Pelit style, which TOI-based lead
 scoring can't see. Probes each unique live 46/47 website (homepage +
 robots.txt + sitemap), fingerprints the e-commerce platform, and estimates
 the catalog size from product URLs. Results are cached per host in
-`data/webshop_cache.sqlite`; output is `out/webshops.csv`, ranked by shop
-score and catalog estimate.
+`data/webshop_cache.sqlite` (probe-versioned: logic changes re-probe
+automatically); output is `out/webshops.csv`, ranked by shop score and
+catalog estimate.
 ```
 python scripts/find_webshops.py --groups 46,47 --top 40
 ```
@@ -161,6 +162,25 @@ Then analyse the finds with Ollama:
 ```
 python scripts/analyze_websites.py --ids-file out/webshop_targets.csv
 ```
+
+Measurement notes (all learned from the reference cases):
+- PRH registry URLs are normalized (scheme-less `www.site.com` forms are
+  common) — the first run silently skipped 79% of companies without this.
+- Sitemap children are recursed under any name (`products_part_1.xml` just
+  as `sitemap_products_1.xml`), and query-keyed product URLs
+  (`product_info.php?products_id=N`) keep their query — otherwise osC-style
+  shops collapse to one URL.
+- The sitemap cap is 100k URLs; a host that hits it is marked capped and
+  its estimate displays as a floor (`100 000+`). taloon.com measures 100 000+
+  this way (its full sitemap is ~200k URLs).
+- When product URL patterns match nothing but the sitemap is huge on an
+  e-commerce site (flat slugs), the raw sitemap size is used as the floor
+  estimate.
+- A WAF-blocked homepage (403) still gets its sitemap chain counted —
+  puolenkuunpelit.com measures 100 000+ despite a bot-challenged homepage.
+  Because of this, `unreachable` companies are probed by default (the
+  operator, Grognard Oy, is a real Lahti shop that the liveness probe
+  mislabels); only `parked` sites are skipped.
 
 ### 5. Hiring-signal scan (Ollama)
 Scans company websites for active hiring signals using a local LLM.

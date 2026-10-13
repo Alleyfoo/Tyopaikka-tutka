@@ -161,6 +161,14 @@ def load_webshops(_mtime: float) -> pd.DataFrame:
             shops[col] = pd.to_numeric(shops[col], errors="coerce")
     shops["shop_catalog_estimate"] = shops["shop_catalog_estimate"].fillna(0).astype(int)
     shops["shop_score"] = shops["shop_score"].fillna(0).astype(int)
+    # The sitemap counter stopped at its cap for giant shops — the catalog
+    # estimate is then a floor, shown as "100 000+".
+    if "shop_sitemap_capped" in shops.columns:
+        shops["shop_sitemap_capped"] = (
+            shops["shop_sitemap_capped"].astype(str).str.lower() == "true"
+        )
+    else:
+        shops["shop_sitemap_capped"] = False
     if "road_distance_km" in shops.columns:
         shops["dist_km"] = (
             pd.to_numeric(shops["road_distance_km"], errors="coerce")
@@ -881,7 +889,12 @@ with tab_shops:
                         lambda s: STATION_INFO.get(s, {"label": s})["label"]
                     ),
                     "Työmatka": shown["commute_text"],
-                    "Tuotteita": shown["shop_catalog_estimate"],
+                    "Tuotteita": [
+                        f"{int(v):,}".replace(",", " ") + ("+" if c else "")
+                        for v, c in zip(
+                            shown["shop_catalog_estimate"], shown["shop_sitemap_capped"]
+                        )
+                    ],
                     "Alusta": shown["shop_platform"].fillna("–"),
                     "Myy": sells.fillna(shown["toi_description"]),
                     "Pisteet": shown["shop_score"],
@@ -894,9 +907,6 @@ with tab_shops:
                 width="stretch",
                 column_config={
                     "Verkkosivut": st.column_config.LinkColumn("Verkkosivut"),
-                    "Tuotteita": st.column_config.NumberColumn(
-                        "Tuotteita", format="%d kpl"
-                    ),
                     "Pisteet": st.column_config.ProgressColumn(
                         "Pisteet", min_value=0, max_value=9, format="%d"
                     ),
