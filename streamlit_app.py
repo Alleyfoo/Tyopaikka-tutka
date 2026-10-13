@@ -165,6 +165,7 @@ with st.sidebar:
         options=list(station_options.keys()),
         default=list(station_options.keys()),
         format_func=lambda k: station_options[k],
+        key="station_select",
     )
 
     # Distance slider
@@ -175,6 +176,7 @@ with st.sidebar:
         max_value=5.0,
         value=4.0,
         step=0.5,
+        key="max_dist",
     )
     st.caption("⚠️ Etäisyys on kävelymatka kadulta asemalle (arvio; ei katuosoitteen tarkkuutta).")
 
@@ -185,6 +187,7 @@ with st.sidebar:
         options=sorted(transit.STATION_COORDS.keys()),
         index=sorted(transit.STATION_COORDS.keys()).index(transit.DEFAULT_ORIGIN),
         help="Junamatkan lähtöasema. Työmatka = juna lähtöasemalta + viime kilometri asemalta yritykselle.",
+        key="origin_station",
     )
     _access_keys = list(ACCESS_MODE_LABELS.keys())
     access_mode = st.selectbox(
@@ -193,6 +196,7 @@ with st.sidebar:
         index=_access_keys.index("bus"),
         format_func=lambda k: ACCESS_MODE_LABELS[k],
         help="Oletus: bussi/liityntä — kävely on epärealistinen useamman kilometrin matkalla.",
+        key="access_mode",
     )
     overhead_min = st.slider(
         "Odotus + liityntä (min)",
@@ -202,8 +206,11 @@ with st.sidebar:
         step=1,
         help="Junan keskimääräinen odotusaika + matka laiturille. Lisätään työmatka-aikaan, "
         "jotta arvio ei ole nopeampi kuin todellinen matka.",
+        key="overhead_min",
     )
-    commute_limit_on = st.toggle("Rajaa työmatkan keston mukaan", value=False)
+    commute_limit_on = st.toggle(
+        "Rajaa työmatkan keston mukaan", value=False, key="commute_limit_on"
+    )
     max_commute = st.slider(
         "Enintään (min)",
         min_value=15,
@@ -211,6 +218,7 @@ with st.sidebar:
         value=60,
         step=5,
         disabled=not commute_limit_on,
+        key="max_commute",
     )
 
     # Industry filter
@@ -222,21 +230,26 @@ with st.sidebar:
         options=list(industry_options.keys()),
         default=list(industry_options.keys()),
         format_func=lambda k: industry_options[k],
+        key="industry_select",
     )
 
     # Website toggle
-    only_with_website = st.toggle("Vain yritykset joilla on verkkosivut", value=False)
+    only_with_website = st.toggle(
+        "Vain yritykset joilla on verkkosivut", value=False, key="only_with_website"
+    )
     only_live = st.toggle(
         "Vain toimivat sivut",
         value=False,
         help="Näytä vain yritykset joiden verkkosivu vastaa ja näyttää oikealta "
         "(ei kuollut tai parkkeerattu) — karkea merkki siitä että yritys on aktiivinen.",
+        key="only_live",
     )
     only_hiring = st.toggle(
         "Vain rekrytoivat (AI)",
         value=False,
         help="Näytä vain yritykset joiden sivulla AI-analyysi havaitsi "
         "rekrytointisignaalin (vain analysoiduille yrityksille).",
+        key="only_hiring",
     )
 
     # Registration year
@@ -248,6 +261,7 @@ with st.sidebar:
         min_value=min_year,
         max_value=max_year,
         value=(min_year, max_year),
+        key="reg_range",
     )
 
     st.divider()
@@ -368,7 +382,9 @@ with tab_map:
         n_pages = max(1, (total + page_size - 1) // page_size)
         page = 1
         if n_pages > 1:
-            page = st.number_input("Sivu", min_value=1, max_value=n_pages, value=1, step=1)
+            page = st.number_input(
+                "Sivu", min_value=1, max_value=n_pages, value=1, step=1, key="map_page"
+            )
         lo = (int(page) - 1) * page_size
         hi = min(lo + page_size, total)
         page_df = valid_coords.iloc[lo:hi].copy()
@@ -576,7 +592,9 @@ with tab_table:
     # so a company is always findable; with no search the table reflects the
     # current filters as usual.
     search = st.text_input(
-        "🔎 Hae yrityksen nimellä tai osoitteella (hakee kaikista yrityksistä)", ""
+        "🔎 Hae yrityksen nimellä tai osoitteella (hakee kaikista yrityksistä)",
+        "",
+        key="search",
     )
     if search:
         base = df_raw.copy()
@@ -680,6 +698,7 @@ with tab_leads:
         "Palvelutyyppi",
         options=["Verkkokauppa / webshop", "PIM / tuotekataloogi", "Data-analyysi"],
         horizontal=True,
+        key="lead_axis",
     )
     axis_col = {
         "Verkkokauppa / webshop": "s_webshop",
@@ -691,11 +710,12 @@ with tab_leads:
         "Näytä kaikki",
         value=False,
         help="Näyttää ja lataa koko pisteytetyn listan, ei vain top-N.",
+        key="leads_show_all",
     )
     if show_all:
         top = scored.sort_values([axis_col, "commute_min"], ascending=[False, True])
     else:
-        n_leads = st.slider("Näytä top-N", 5, 500, 30, step=5)
+        n_leads = st.slider("Näytä top-N", 5, 500, 30, step=5, key="leads_top_n")
         top = scored.sort_values([axis_col, "commute_min"], ascending=[False, True]).head(
             n_leads
         )
@@ -794,7 +814,7 @@ with tab_fit:
             [score_col, "commute_min"], ascending=[False, True], na_position="last"
         )
     else:
-        n_fit = st.slider("Näytä top-N", 5, 500, 30, step=5)
+        n_fit = st.slider("Näytä top-N", 5, 500, 30, step=5, key="fit_top_n")
         top_fit = fit_frame.sort_values(
             [score_col, "commute_min"], ascending=[False, True], na_position="last"
         ).head(n_fit)
