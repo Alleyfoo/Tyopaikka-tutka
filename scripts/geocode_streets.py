@@ -44,11 +44,12 @@ FINLAND_BBOX = (19.0, 32.0, 59.0, 71.0)  # lon_min, lon_max, lat_min, lat_max
 # distance anchor matches the rail model and the dashboard markers exactly.
 STATION_COORDS = {k: _RAIL_COORDS[k] for k in (
     "Lahti", "Kerava", "Savio", "Pasila", "Tikkurila",
-    "Järvenpää", "Hyvinkää", "Riihimäki",
+    "Järvenpää", "Hyvinkää", "Riihimäki", "Haarajoki", "Henna",
 )}
 
 # Municipality to use in the geocode query (Savio is a district of Kerava,
-# Pasila of Helsinki).
+# Pasila of Helsinki; Haarajoki is a district of Järvenpää, Henna of
+# Mäntsälä).
 CITY_BY_STATION = {
     "Lahti": "Lahti",
     "Kerava": "Kerava",
@@ -58,6 +59,8 @@ CITY_BY_STATION = {
     "Järvenpää": "Järvenpää",
     "Hyvinkää": "Hyvinkää",
     "Riihimäki": "Riihimäki",
+    "Haarajoki": "Järvenpää",
+    "Henna": "Mäntsälä",
 }
 
 # A street geocode farther than this from its station is treated as a bad match
