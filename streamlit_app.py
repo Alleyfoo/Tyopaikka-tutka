@@ -828,6 +828,15 @@ with tab_shops:
                 help="Ketjut (esim. monta K-Rauta-yhtiötä samalla sivustolla) "
                      "näkyvät vain kerran. Poista päältä nähdäksesi kaikki.",
             )
+            sort_by = st.radio(
+                "Järjestys",
+                ("Työmatka", "Katalogin koko", "Pisteet"),
+                index=0,
+                horizontal=True,
+                key="shop_sort",
+                help="Työmatka = lyhin ruuhka-ajan työmatka ensin (sama arvo "
+                     "kuin sivupalkin minuuttisuodattimessa).",
+            )
 
         sel = shops[shops["shop_catalog_estimate"] >= min_products].copy()
         if segment == "Vähittäiskauppa":
@@ -837,11 +846,37 @@ with tab_shops:
         if shop_stations:
             sel = sel[sel["nearest_station"].isin(shop_stations)]
 
-        # Sort once: catalog first, score as tiebreak — then optionally keep only
-        # the biggest shop per host (chains share one webstore).
-        sel = sel.sort_values(
-            ["shop_catalog_estimate", "shop_score"], ascending=False
-        )
+        # Numeric commute (rush + best) for every candidate: sorting by
+        # Työmatka needs it, the display range reuses it. The rush value is
+        # the same one the sidebar minute filter uses.
+        sel["_commute_rush"] = [
+            transit.commute_minutes(
+                s, d, mode=access_mode, rail_minutes=_rail_rush,
+                overhead_min=overhead_min,
+            )
+            for s, d in zip(sel["nearest_station"], sel["dist_km"])
+        ]
+        sel["_commute_best"] = [
+            transit.commute_minutes(
+                s, d, mode=access_mode, rail_minutes=_rail,
+                overhead_min=overhead_min,
+            )
+            for s, d in zip(sel["nearest_station"], sel["dist_km"])
+        ]
+        if sort_by == "Työmatka":
+            sel = sel.sort_values(
+                ["_commute_rush", "shop_catalog_estimate"],
+                ascending=[True, False],
+            )
+        elif sort_by == "Pisteet":
+            sel = sel.sort_values(
+                ["shop_score", "shop_catalog_estimate"], ascending=False
+            )
+        else:
+            sel = sel.sort_values(
+                ["shop_catalog_estimate", "shop_score"], ascending=False
+            )
+        # Dedupe after sorting: with Työmatka the closest entry of a chain wins.
         if one_per_site and "_host" in sel.columns:
             sel = sel.drop_duplicates(subset="_host", keep="first")
 
@@ -869,17 +904,8 @@ with tab_shops:
             shown = shown.copy()
             # Commute range from the user's home station, same model as elsewhere.
             shown["commute_text"] = [
-                _commute_display(
-                    transit.commute_minutes(
-                        s, d, mode=access_mode, rail_minutes=_rail,
-                        overhead_min=overhead_min,
-                    ),
-                    transit.commute_minutes(
-                        s, d, mode=access_mode, rail_minutes=_rail_rush,
-                        overhead_min=overhead_min,
-                    ),
-                )
-                for s, d in zip(shown["nearest_station"], shown["dist_km"])
+                _commute_display(b, r)
+                for b, r in zip(shown["_commute_best"], shown["_commute_rush"])
             ]
             sells = shown["llm_sells"] if "llm_sells" in shown.columns else shown["toi_description"]
             shop_display = pd.DataFrame(
@@ -913,7 +939,9 @@ with tab_shops:
                 },
                 height=500,
             )
-            csv_shops = sel.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+            csv_shops = sel.drop(
+                columns=["_commute_best", "_commute_rush"], errors="ignore"
+            ).to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
             st.download_button(
                 "⬇️ Lataa verkkokaupat CSV (koko suodatettu lista)",
                 data=csv_shops,
